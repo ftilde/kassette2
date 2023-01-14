@@ -1,7 +1,7 @@
 .program pwm
 .side_set 1 opt
 
-    out x, 32
+    out x, 8
     mov y, isr       side 0
 countloop0:
     jmp x!=y noset0
