@@ -76,29 +76,19 @@ fn data(sample_rate: u32) -> impl Iterator<Item = u8> {
     let period_seconds = 1;
     let period_samples = sample_rate * period_seconds;
     let mut i: u32 = 0;
-    //let mut j: u32 = 0;
     core::iter::from_fn(move || {
         //let f = i as f32 * core::f32::consts::TAU / (period_samples as f32);
         //use micromath::F32Ext;
         //let val = (((-f32::cos(f) + 1.0) * 0.5) * u8::MAX as f32) as u32;
 
         let val;
-        if (i / period_samples) % 2 == 0 {
-            val = 255;
-        } else {
-            val = 0;
-        }
-
-        //if i == period_samples {
-        //    i = 0;
-        //    j += 1;
-        //}
-        //let val;
-        //if j % 2 == 0 {
+        //if (i / period_samples) % 2 == 0 {
         //    val = 255;
         //} else {
         //    val = 0;
         //}
+
+        val = (i * 256 / period_samples) % 256;
 
         i += 1;
         Some(val as u8)
@@ -166,7 +156,7 @@ fn main() -> ! {
     let (mut sm, _, mut tx) = PIOBuilder::from_program(installed)
         .set_pins(led_pin_id, 1)
         .side_set_pin_base(led_pin_id)
-        .clock_divisor_fixed_point(4, 0)
+        .clock_divisor_fixed_point(1, 0)
         //.autopull(true)
         .build(sm0);
 
@@ -180,7 +170,7 @@ fn main() -> ! {
     let max_value = u8::MAX as u32 - 1;
     pio_pwm_set_period(sm, &mut tx, max_value);
 
-    let mut data_fn = data(40_750);
+    let mut data_fn = data(40_770);
     let data0 = data_fn.next().unwrap();
     let data1 = data_fn.next().unwrap();
     let mut data = data0 as u32 | ((data1 as u32) << 16);

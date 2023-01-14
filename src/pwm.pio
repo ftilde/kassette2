@@ -1,16 +1,43 @@
 .program pwm
 .side_set 1 opt
 
-    pull noblock    side 0
+    pull noblock
     mov x, osr
-    mov y, isr
-countloop:
-    jmp x!=y noset
-    jmp skip        side 1
-noset:
+    mov y, isr       side 0
+countloop0:
+    jmp x!=y noset0
+    jmp skip0        side 1
+noset0:
     nop
-skip:
-    jmp y-- countloop
+skip0:
+    jmp y-- countloop0
+
+    mov y, isr       side 0
+countloop1:
+    jmp x!=y noset1
+    jmp skip1        side 1
+noset1:
+    nop
+skip1:
+    jmp y-- countloop1
+
+    mov y, isr       side 0
+countloop2:
+    jmp x!=y noset2
+    jmp skip2        side 1
+noset2:
+    nop
+skip2:
+    jmp y-- countloop2
+
+    mov y, isr       side 0
+countloop3:
+    jmp x!=y noset3
+    jmp skip3        side 1
+noset3:
+    nop
+skip3:
+    jmp y-- countloop3
 
 ;.program pwm
 ;.side_set 1 opt
