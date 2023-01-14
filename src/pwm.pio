@@ -1,8 +1,7 @@
 .program pwm
 .side_set 1 opt
 
-    pull noblock
-    mov x, osr
+    out x, 32
     mov y, isr       side 0
 countloop0:
     jmp x!=y noset0
