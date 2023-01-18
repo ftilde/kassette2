@@ -72,10 +72,15 @@ fn pio_pwm_set_period<T: ValidStateMachine>(
     sm.start()
 }
 
-fn data(sample_rate: u32) -> impl Iterator<Item = u8> {
-    let period_seconds = 1;
-    let period_samples = sample_rate * period_seconds;
+fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
+    let period_samples = sample_rate / freq_hz;
     let mut i: u32 = 0;
+    let sin_table: [u8; 256] = core::array::from_fn(|i| {
+        let f = i as f32 * core::f32::consts::TAU / 256.0;
+        use micromath::F32Ext;
+        let val = (((-f32::cos(f) + 1.0) * 0.5) * u8::MAX as f32) as u32;
+        val.min(255) as u8
+    });
     core::iter::from_fn(move || {
         //let f = i as f32 * core::f32::consts::TAU / (period_samples as f32);
         //use micromath::F32Ext;
@@ -89,6 +94,7 @@ fn data(sample_rate: u32) -> impl Iterator<Item = u8> {
         //}
 
         val = (i * 256 / period_samples) % 256;
+        let val = sin_table[val as usize];
 
         i += 1;
         Some(val as u8)
@@ -148,20 +154,21 @@ fn main() -> ! {
     let installed = pio0.install(&program.program).unwrap();
 
     // Set gpio25 to pio
-    let _led: hal::gpio::Pin<_, hal::gpio::FunctionPio0> = pins.led.into_mode();
-    let led_pin_id = 25;
+    let _led: hal::gpio::Pin<_, hal::gpio::FunctionPio0> = pins.gpio15.into_mode();
+    //let output_pin_id = 25; //led
+    let output_pin_id = 15; //led
 
     // Build the pio program and set pin both for set and side set!
     // We are running with the default divider which is 1 (max speed)
     let (mut sm, _, mut tx) = PIOBuilder::from_program(installed)
-        .set_pins(led_pin_id, 1)
-        .side_set_pin_base(led_pin_id)
+        .set_pins(output_pin_id, 1)
+        .side_set_pin_base(output_pin_id)
         .clock_divisor_fixed_point(1, 0)
         .autopull(true)
         .build(sm0);
 
     // Set pio pindir for gpio25
-    sm.set_pindirs([(led_pin_id, hal::pio::PinDir::Output)]);
+    sm.set_pindirs([(output_pin_id, hal::pio::PinDir::Output)]);
 
     // Start state machine
     let sm = sm.start();
@@ -170,11 +177,11 @@ fn main() -> ! {
     let max_value = u8::MAX as u32 - 1;
     pio_pwm_set_period(sm, &mut tx, max_value);
 
-    let mut data_fn = data(40_783);
+    let mut data_fn = data(40_783, 200);
     let mut data: [u8; 4] = core::array::from_fn(|_| data_fn.next().unwrap());
     loop {
         while tx.write(bytemuck::cast(data)) {
-            data = core::array::from_fn(|_| data_fn.next().unwrap());
+            data = core::array::from_fn(|_| data_fn.next().unwrap().min(max_value as u8));
         }
         delay.delay_us(1);
     }
