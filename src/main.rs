@@ -165,6 +165,7 @@ fn main() -> ! {
         .side_set_pin_base(output_pin_id)
         .clock_divisor_fixed_point(1, 0)
         .autopull(true)
+        .buffers(hal::pio::Buffers::OnlyTx) // Increase queue size to a whopping 8*4=32 samples
         .build(sm0);
 
     // Set pio pindir for gpio25
@@ -196,6 +197,6 @@ fn main() -> ! {
                 data_fn_i = (data_fn_i + 1) % data_fns.len();
             }
         }
-        delay.delay_us(1);
+        delay.delay_us(700);
     }
 }
