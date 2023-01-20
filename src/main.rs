@@ -177,11 +177,24 @@ fn main() -> ! {
     let max_value = u8::MAX as u32 - 1;
     pio_pwm_set_period(sm, &mut tx, max_value);
 
-    let mut data_fn = data(40_783, 200);
-    let mut data: [u8; 4] = core::array::from_fn(|_| data_fn.next().unwrap());
+    let mut data_fns = [
+        data(40_783, 100),
+        data(40_783, 200),
+        data(40_783, 400),
+        data(40_783, 800),
+    ];
+    let mut data_fn_i = 0;
+    let mut data: [u8; 4] = core::array::from_fn(|_| data_fns[data_fn_i].next().unwrap());
+    let mut i = 0;
     loop {
         while tx.write(bytemuck::cast(data)) {
-            data = core::array::from_fn(|_| data_fn.next().unwrap().min(max_value as u8));
+            data =
+                core::array::from_fn(|_| data_fns[data_fn_i].next().unwrap().min(max_value as u8));
+            i += 1;
+            if i == 10000 {
+                i = 0;
+                data_fn_i = (data_fn_i + 1) % data_fns.len();
+            }
         }
         delay.delay_us(1);
     }
