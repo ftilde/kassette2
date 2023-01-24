@@ -12,6 +12,9 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
+
+use cortex_m::interrupt::Mutex;
 //use defmt::info;
 //use defmt_rtt as _;
 // The macro for our start-up function
@@ -33,9 +36,13 @@ use rp_pico::hal::pac;
 use rp_pico::hal;
 
 // Import pio crates
+use fugit::ExtU32;
 use hal::pio::{PIOBuilder, Running, StateMachine, Tx, ValidStateMachine, SM0};
+use pac::interrupt;
 use pio::{Instruction, InstructionOperands, OutDestination};
 use pio_proc::pio_file;
+use rp_pico::hal::timer::Alarm;
+use rp_pico::hal::timer::Alarm0;
 
 /// Set pio pwm period
 ///
@@ -110,6 +117,11 @@ fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
 /// infinite loop.
 #[entry]
 fn main() -> ! {
+    let mut rb = SampleQueue::default();
+    let (mut prod, cons) = rb.split_ref();
+    // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
+    let cons = unsafe { core::mem::transmute(cons) };
+
     // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
@@ -153,9 +165,12 @@ fn main() -> ! {
     let program = pio_file!("./src/pwm.pio", select_program("pwm"));
     let installed = pio0.install(&program.program).unwrap();
 
-    // Set gpio25 to pio
-    let _led: hal::gpio::Pin<_, hal::gpio::FunctionPio0> = pins.gpio15.into_mode();
+    //let led: LedPin = pins.led.into_push_pull_output();
+
     //let output_pin_id = 25; //led
+
+    // Set pin to pio
+    let _pio_pin: hal::gpio::Pin<_, hal::gpio::FunctionPio0> = pins.gpio15.into_mode();
     let output_pin_id = 15; //led
 
     // Build the pio program and set pin both for set and side set!
@@ -175,8 +190,11 @@ fn main() -> ! {
     let sm = sm.start();
 
     // Set period
-    let max_value = u8::MAX as u32 - 1;
-    pio_pwm_set_period(sm, &mut tx, max_value);
+    pio_pwm_set_period(sm, &mut tx, MAX_VALUE);
+
+    let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
+    let queue_fill_period = 700.micros(); //< 32 samples/44kHz
+    setup_timer_interrupt(&mut timer, queue_fill_period, cons, tx);
 
     let mut data_fns = [
         data(40_783, 100),
@@ -185,18 +203,85 @@ fn main() -> ! {
         data(40_783, 800),
     ];
     let mut data_fn_i = 0;
-    let mut data: [u8; 4] = core::array::from_fn(|_| data_fns[data_fn_i].next().unwrap());
+    let mut data = 0;
     let mut i = 0;
     loop {
-        while tx.write(bytemuck::cast(data)) {
-            data =
-                core::array::from_fn(|_| data_fns[data_fn_i].next().unwrap().min(max_value as u8));
+        while prod.push(data).is_ok() {
+            data = data_fns[data_fn_i].next().unwrap().min(MAX_VALUE as u8);
             i += 1;
-            if i == 10000 {
+            if i == 40000 {
                 i = 0;
                 data_fn_i = (data_fn_i + 1) % data_fns.len();
             }
         }
-        delay.delay_us(700);
+        delay.delay_ms(20);
     }
+}
+
+const MAX_VALUE: u32 = u8::MAX as u32 - 1;
+const SAMPLE_QUEUE_SIZE: usize = 1024;
+type SampleQueue = ringbuf::StaticRb<u8, SAMPLE_QUEUE_SIZE>;
+type QueueConsumer = ringbuf::consumer::Consumer<u8, &'static SampleQueue>;
+//type QueueProducer = ringbuf::producer::Producer<[u8; 4], &'static SampleQueue>;
+type PioTx = hal::pio::Tx<(pac::PIO0, SM0)>;
+//type LedPin = hal::gpio::Pin<hal::gpio::bank0::Gpio25, hal::gpio::Output<hal::gpio::PushPull>>;
+
+struct TimerIrqData {
+    alarm: Alarm0,
+    period: fugit::MicrosDurationU32,
+    queue_input: QueueConsumer,
+    pio_tx: PioTx,
+    //led: LedPin,
+}
+static TIMER_IRQ_DATA: Mutex<RefCell<Option<TimerIrqData>>> = Mutex::new(RefCell::new(None));
+
+fn setup_timer_interrupt(
+    timer: &mut hal::Timer,
+    period: fugit::MicrosDurationU32,
+    queue_input: QueueConsumer,
+    pio_tx: PioTx,
+    //led: LedPin,
+) {
+    unsafe {
+        pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
+    }
+
+    let mut alarm0 = timer.alarm_0().unwrap();
+    alarm0.enable_interrupt();
+    alarm0.schedule(period).unwrap();
+    cortex_m::interrupt::free(|cs| {
+        TIMER_IRQ_DATA.borrow(cs).replace(Some(TimerIrqData {
+            alarm: alarm0,
+            period,
+            queue_input,
+            pio_tx,
+            //led,
+        }));
+    });
+}
+
+#[interrupt]
+fn TIMER_IRQ_0() {
+    // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndButton>`
+    static mut DATA: Option<TimerIrqData> = None;
+
+    // This is one-time lazy initialisation. We steal the variables given to us
+    // via `GLOBAL_PINS`.
+    let data = if let Some(data) = DATA {
+        data
+    } else {
+        cortex_m::interrupt::free(|cs| {
+            *DATA = TIMER_IRQ_DATA.borrow(cs).take();
+            DATA.as_mut().unwrap()
+        })
+    };
+
+    while !data.pio_tx.is_full() {
+        let mut d = [127u8; 4];
+        data.queue_input.pop_slice(&mut d);
+        data.pio_tx.write(bytemuck::cast(d));
+    }
+
+    data.alarm.clear_interrupt();
+    data.alarm.schedule(data.period).unwrap();
 }

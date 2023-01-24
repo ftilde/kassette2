@@ -22,4 +22,6 @@ pio = "0.2.1"
 pio-proc = "0.2.1"
 bytemuck = "1.12"
 micromath = "2.0"
+fugit = "0.3.6"
+ringbuf = { version = "0.3.2", default-features = false}
 #usbd-serial = "0.1"
