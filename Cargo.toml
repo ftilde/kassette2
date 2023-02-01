@@ -25,3 +25,4 @@ micromath = "2.0"
 fugit = "0.3.6"
 ringbuf = { version = "0.3.2", default-features = false}
 #usbd-serial = "0.1"
+embedded-sdmmc = "0.4"
