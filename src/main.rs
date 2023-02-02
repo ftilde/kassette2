@@ -1,20 +1,11 @@
-//! # Pico PIO PWM Blink Example
-//!
-//! Fades the LED on a Pico board using the PIO peripheral with an pwm program.
-//!
-//! This will fade in the LED attached to GP25, which is the pin the Pico
-//! uses for the on-board LED.
-//!
-//! This example uses a few advance pio tricks such as side setting pins and instruction injection.
-//!
-//! See the `Cargo.toml` file for Copyright and license details. Except for the pio program which is subject to a different license.
-
 #![no_std]
 #![no_main]
 
-use core::cell::RefCell;
+mod blink;
+mod config;
+mod output;
+mod queue;
 
-use cortex_m::interrupt::Mutex;
 use fugit::RateExtU32;
 //use defmt::info;
 //use defmt_rtt as _;
@@ -26,24 +17,9 @@ use rp_pico::entry;
 use panic_halt as _;
 
 // Pull in any important traits
-use rp_pico::hal::prelude::*;
-
-// A shorter alias for the Peripheral Access Crate, which provides low-level
-// register access
-use rp_pico::hal::pac;
-
-// A shorter alias for the Hardware Abstraction Layer, which provides
-// higher-level drivers.
 use rp_pico::hal;
-
-// Import pio crates
-use fugit::ExtU32;
-use hal::pio::{PIOBuilder, Running, StateMachine, Tx, ValidStateMachine, SM0};
-use pac::interrupt;
-use pio::{Instruction, InstructionOperands, OutDestination};
-use pio_proc::pio_file;
-use rp_pico::hal::timer::Alarm;
-use rp_pico::hal::timer::Alarm0;
+use rp_pico::hal::pac;
+use rp_pico::hal::prelude::*;
 
 use embedded_sdmmc::{filesystem::Mode, Controller, SdMmcSpi, TimeSource, Timestamp, VolumeIdx};
 
@@ -64,85 +40,6 @@ impl TimeSource for DummyTimesource {
             seconds: 0,
         }
     }
-}
-
-//const BLINK_OK_LONG: [u8; 1] = [8u8];
-//const BLINK_OK_SHORT_LONG: [u8; 4] = [1u8, 0u8, 6u8, 0u8];
-//const BLINK_OK_SHORT_SHORT_LONG: [u8; 6] = [1u8, 0u8, 1u8, 0u8, 6u8, 0u8];
-const BLINK_ERR_2_SHORT: [u8; 4] = [1u8, 0u8, 1u8, 0u8];
-const BLINK_ERR_3_SHORT: [u8; 6] = [1u8, 0u8, 1u8, 0u8, 1u8, 0u8];
-const BLINK_ERR_4_SHORT: [u8; 8] = [1u8, 0u8, 1u8, 0u8, 1u8, 0u8, 1u8, 0u8];
-const BLINK_ERR_5_SHORT: [u8; 10] = [1u8, 0u8, 1u8, 0u8, 1u8, 0u8, 1u8, 0u8, 1u8, 0u8];
-const BLINK_ERR_6_SHORT: [u8; 12] = [1u8, 0u8, 1u8, 0u8, 1u8, 0u8, 1u8, 0u8, 1u8, 0u8, 1u8, 0u8];
-
-fn blink_signals(
-    pin: &mut dyn embedded_hal::digital::v2::OutputPin<Error = core::convert::Infallible>,
-    delay: &mut cortex_m::delay::Delay,
-    sig: &[u8],
-) {
-    for bit in sig {
-        if *bit != 0 {
-            pin.set_high().unwrap();
-        } else {
-            pin.set_low().unwrap();
-        }
-
-        let length = if *bit > 0 { *bit } else { 1 };
-
-        for _ in 0..length {
-            delay.delay_ms(200);
-        }
-    }
-
-    pin.set_low().unwrap();
-
-    delay.delay_ms(500);
-}
-
-fn blink_signals_loop(
-    pin: &mut dyn embedded_hal::digital::v2::OutputPin<Error = core::convert::Infallible>,
-    delay: &mut cortex_m::delay::Delay,
-    sig: &[u8],
-) -> ! {
-    loop {
-        blink_signals(pin, delay, sig);
-        delay.delay_ms(1000);
-    }
-}
-
-/// Set pio pwm period
-///
-/// This uses a sneaky trick to set a second value besides the duty cycle.
-/// We first write a value to the tx fifo. But instead of the normal instructions we
-/// have stopped the state machine and inject our own instructions that move the written value to the ISR.
-fn pio_pwm_set_period<T: ValidStateMachine>(
-    sm: StateMachine<(hal::pac::PIO0, SM0), Running>,
-    tx: &mut Tx<T>,
-    period: u32,
-) -> StateMachine<(hal::pac::PIO0, SM0), Running> {
-    // To make sure the inserted instructions actually use our newly written value
-    // We first busy loop to empty the queue. (Which typically should be the case)
-    while !tx.is_empty() {}
-
-    let mut sm = sm.stop();
-    tx.write(period);
-    sm.exec_instruction(Instruction {
-        operands: InstructionOperands::PULL {
-            if_empty: false,
-            block: false,
-        },
-        delay: 0,
-        side_set: None,
-    });
-    sm.exec_instruction(Instruction {
-        operands: InstructionOperands::OUT {
-            destination: OutDestination::ISR,
-            bit_count: 32,
-        },
-        delay: 0,
-        side_set: None,
-    });
-    sm.start()
 }
 
 fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
@@ -183,7 +80,7 @@ fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
 /// infinite loop.
 #[entry]
 fn main() -> ! {
-    let mut rb = SampleQueue::default();
+    let mut rb = queue::SampleQueue::default();
     let (mut prod, cons) = rb.split_ref();
     // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
     let cons = unsafe { core::mem::transmute(cons) };
@@ -229,38 +126,7 @@ fn main() -> ! {
     // PIO stuff ------------------------------------------------------------------
     // ----------------------------------------------------------------------------
 
-    let (mut pio0, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
-
-    // Create a pio program
-    let program = pio_file!("./src/pwm.pio", select_program("pwm"));
-    let installed = pio0.install(&program.program).unwrap();
-
-    //let led: LedPin = pins.led.into_push_pull_output();
-
-    //let output_pin_id = 25; //led
-
-    // Set pin to pio
-    let _pio_pin: hal::gpio::Pin<_, hal::gpio::FunctionPio0> = pins.gpio15.into_mode();
-    let output_pin_id = 15; //led
-
-    // Build the pio program and set pin both for set and side set!
-    // We are running with the default divider which is 1 (max speed)
-    let (mut sm, _, mut tx) = PIOBuilder::from_program(installed)
-        .set_pins(output_pin_id, 1)
-        .side_set_pin_base(output_pin_id)
-        .clock_divisor_fixed_point(1, 0)
-        .autopull(true)
-        .buffers(hal::pio::Buffers::OnlyTx) // Increase queue size to a whopping 8*4=32 samples
-        .build(sm0);
-
-    // Set pio pindir for gpio25
-    sm.set_pindirs([(output_pin_id, hal::pio::PinDir::Output)]);
-
-    // Start state machine
-    let sm = sm.start();
-
-    // Set period
-    pio_pwm_set_period(sm, &mut tx, MAX_VALUE);
+    output::setup_output(pac.PIO0, pac.TIMER, &mut pac.RESETS, pins.gpio15, cons);
 
     // ----------------------------------------------------------------------------
     // SD-Card stuff---------------------------------------------------------------
@@ -292,7 +158,7 @@ fn main() -> ! {
     let block = match sdspi.acquire() {
         Ok(block) => block,
         Err(_e) => {
-            blink_signals_loop(&mut led_pin, &mut delay, &BLINK_ERR_2_SHORT);
+            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
         }
     };
 
@@ -305,7 +171,7 @@ fn main() -> ! {
     match cont.device().card_size_bytes() {
         Ok(_size) => {}
         Err(_e) => {
-            blink_signals_loop(&mut led_pin, &mut delay, &BLINK_ERR_3_SHORT);
+            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
         }
     }
 
@@ -314,7 +180,7 @@ fn main() -> ! {
     let mut volume = match cont.get_volume(VolumeIdx(0)) {
         Ok(v) => v,
         Err(_e) => {
-            blink_signals_loop(&mut led_pin, &mut delay, &BLINK_ERR_4_SHORT);
+            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_4_SHORT);
         }
     };
 
@@ -325,24 +191,16 @@ fn main() -> ! {
     let dir = match cont.open_root_dir(&volume) {
         Ok(dir) => dir,
         Err(_e) => {
-            blink_signals_loop(&mut led_pin, &mut delay, &BLINK_ERR_5_SHORT);
+            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_5_SHORT);
         }
     };
 
     let mut file = match cont.open_file_in_dir(&mut volume, &dir, "bibi.bin", Mode::ReadOnly) {
         Ok(dir) => dir,
         Err(_e) => {
-            blink_signals_loop(&mut led_pin, &mut delay, &BLINK_ERR_6_SHORT);
+            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_6_SHORT);
         }
     };
-
-    // ----------------------------------------------------------------------------
-    // Queue stuff ----------------------------------------------------------------
-    // ----------------------------------------------------------------------------
-
-    let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
-    let queue_fill_period = 700.micros(); //< 32 samples/44kHz
-    setup_timer_interrupt(&mut timer, queue_fill_period, cons, tx);
 
     // ----------------------------------------------------------------------------
     // Main loop! -----------------------------------------------------------------
@@ -397,69 +255,3 @@ fn main() -> ! {
 }
 
 const MAX_VALUE: u32 = u8::MAX as u32 - 1;
-const SAMPLE_QUEUE_SIZE: usize = 1024;
-type SampleQueue = ringbuf::StaticRb<u8, SAMPLE_QUEUE_SIZE>;
-type QueueConsumer = ringbuf::consumer::Consumer<u8, &'static SampleQueue>;
-//type QueueProducer = ringbuf::producer::Producer<[u8; 4], &'static SampleQueue>;
-type PioTx = hal::pio::Tx<(pac::PIO0, SM0)>;
-//type LedPin = hal::gpio::Pin<hal::gpio::bank0::Gpio25, hal::gpio::Output<hal::gpio::PushPull>>;
-
-struct TimerIrqData {
-    alarm: Alarm0,
-    period: fugit::MicrosDurationU32,
-    queue_input: QueueConsumer,
-    pio_tx: PioTx,
-    //led: LedPin,
-}
-static TIMER_IRQ_DATA: Mutex<RefCell<Option<TimerIrqData>>> = Mutex::new(RefCell::new(None));
-
-fn setup_timer_interrupt(
-    timer: &mut hal::Timer,
-    period: fugit::MicrosDurationU32,
-    queue_input: QueueConsumer,
-    pio_tx: PioTx,
-    //led: LedPin,
-) {
-    unsafe {
-        pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
-    }
-
-    let mut alarm0 = timer.alarm_0().unwrap();
-    alarm0.enable_interrupt();
-    alarm0.schedule(period).unwrap();
-    cortex_m::interrupt::free(|cs| {
-        TIMER_IRQ_DATA.borrow(cs).replace(Some(TimerIrqData {
-            alarm: alarm0,
-            period,
-            queue_input,
-            pio_tx,
-            //led,
-        }));
-    });
-}
-
-#[interrupt]
-fn TIMER_IRQ_0() {
-    // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndButton>`
-    static mut DATA: Option<TimerIrqData> = None;
-
-    // This is one-time lazy initialisation. We steal the variables given to us
-    // via `GLOBAL_PINS`.
-    let data = if let Some(data) = DATA {
-        data
-    } else {
-        cortex_m::interrupt::free(|cs| {
-            *DATA = TIMER_IRQ_DATA.borrow(cs).take();
-            DATA.as_mut().unwrap()
-        })
-    };
-
-    while !data.pio_tx.is_full() {
-        let mut d = [127u8; 4];
-        data.queue_input.pop_slice(&mut d);
-        data.pio_tx.write(bytemuck::cast(d));
-    }
-
-    data.alarm.clear_interrupt();
-    data.alarm.schedule(data.period).unwrap();
-}
