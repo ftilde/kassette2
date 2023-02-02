@@ -1,12 +1,14 @@
 #![no_std]
 #![no_main]
 
+#[allow(unused)]
 mod blink;
 mod config;
 mod output;
 mod queue;
+mod sdcard;
 
-use fugit::RateExtU32;
+use embedded_sdmmc::Mode;
 //use defmt::info;
 //use defmt_rtt as _;
 // The macro for our start-up function
@@ -20,27 +22,6 @@ use panic_halt as _;
 use rp_pico::hal;
 use rp_pico::hal::pac;
 use rp_pico::hal::prelude::*;
-
-use embedded_sdmmc::{filesystem::Mode, Controller, SdMmcSpi, TimeSource, Timestamp, VolumeIdx};
-
-/// A dummy timesource, which is mostly important for creating files.
-#[derive(Default)]
-pub struct DummyTimesource();
-
-impl TimeSource for DummyTimesource {
-    // In theory you could use the RTC of the rp2040 here, if you had
-    // any external time synchronizing device.
-    fn get_timestamp(&self) -> Timestamp {
-        Timestamp {
-            year_since_1970: 0,
-            zero_indexed_month: 0,
-            zero_indexed_day: 0,
-            hours: 0,
-            minutes: 0,
-            seconds: 0,
-        }
-    }
-}
 
 fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
     let period_samples = sample_rate / freq_hz;
@@ -122,85 +103,22 @@ fn main() -> ! {
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    // ----------------------------------------------------------------------------
-    // PIO stuff ------------------------------------------------------------------
-    // ----------------------------------------------------------------------------
+    //let mut led_pin = pins.led.into_push_pull_output();
 
     output::setup_output(pac.PIO0, pac.TIMER, &mut pac.RESETS, pins.gpio15, cons);
 
-    // ----------------------------------------------------------------------------
-    // SD-Card stuff---------------------------------------------------------------
-    // ----------------------------------------------------------------------------
-
-    let mut led_pin = pins.led.into_push_pull_output();
-
-    // These are implicitly used by the spi driver if they are in the correct mode
-    let _spi_sclk = pins.gpio18.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_mosi = pins.gpio19.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_miso = pins.gpio16.into_mode::<hal::gpio::FunctionSpi>();
-    let spi_cs = pins.gpio17.into_push_pull_output();
-
-    // Create an SPI driver instance for the SPI0 device
-    let spi = hal::spi::Spi::<_, _, 8>::new(pac.SPI0);
-
-    // Exchange the uninitialised SPI driver for an initialised one
-    let spi = spi.init(
+    let mut sd = sdcard::init_sd(
+        pins.gpio18.into_mode(),
+        pins.gpio19.into_mode(),
+        pins.gpio16.into_mode(),
+        pins.gpio17.into_mode(),
+        pac.SPI0,
         &mut pac.RESETS,
-        clocks.peripheral_clock.freq(),
-        16_000_000u32.Hz(),
-        &embedded_hal::spi::MODE_0,
+        &clocks,
     );
+    let mut fs = sdcard::SDCardController::init(&mut sd);
 
-    let mut sdspi = SdMmcSpi::new(spi, spi_cs);
-
-    // Next we need to aquire the block device and initialize the
-    // communication with the SD card.
-    let block = match sdspi.acquire() {
-        Ok(block) => block,
-        Err(_e) => {
-            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
-        }
-    };
-
-    //blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
-
-    let mut cont = Controller::new(block, DummyTimesource::default());
-
-    //blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
-
-    match cont.device().card_size_bytes() {
-        Ok(_size) => {}
-        Err(_e) => {
-            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
-        }
-    }
-
-    //blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
-
-    let mut volume = match cont.get_volume(VolumeIdx(0)) {
-        Ok(v) => v,
-        Err(_e) => {
-            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_4_SHORT);
-        }
-    };
-
-    //blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
-
-    // After we have the volume (partition) of the drive we got to open the
-    // root directory:
-    let dir = match cont.open_root_dir(&volume) {
-        Ok(dir) => dir,
-        Err(_e) => {
-            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_5_SHORT);
-        }
-    };
-
-    let mut file = match cont.open_file_in_dir(&mut volume, &dir, "bibi.bin", Mode::ReadOnly) {
-        Ok(dir) => dir,
-        Err(_e) => {
-            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_6_SHORT);
-        }
-    };
+    let mut file = fs.open("bibi.bin", Mode::ReadOnly);
 
     // ----------------------------------------------------------------------------
     // Main loop! -----------------------------------------------------------------
@@ -217,7 +135,7 @@ fn main() -> ! {
     //let mut i = 0;
     let mut buf = [0u8; 1024];
     loop {
-        let read_count = cont.read(&volume, &mut file, &mut buf).unwrap();
+        let read_count = fs.read(&mut file, &mut buf);
         if read_count == 0 {
             break;
         }
@@ -230,7 +148,7 @@ fn main() -> ! {
 
         //delay.delay_ms(20);
     }
-    cont.close_file(&volume, file).unwrap();
+    fs.close(file);
 
     let mut data_fns = [
         data(40_783, 100),
