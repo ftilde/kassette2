@@ -4,7 +4,11 @@ use embedded_sdmmc::{
 };
 use fugit::RateExtU32;
 use rp_pico::{
-    hal::{self, Clock},
+    hal::{
+        self,
+        gpio::{bank0::BankPinId, FunctionSpi, Pin, PinId, PinMode, ValidPinMode},
+        Clock,
+    },
     pac,
 };
 
@@ -26,12 +30,12 @@ impl TimeSource for DummyTimesource {
     }
 }
 
-pub struct SDCardController<'a> {
+pub struct SDCardController<'a, CS: PinId> {
     controller: Controller<
         BlockSpi<
             'a,
             hal::Spi<hal::spi::Enabled, pac::SPI0, 8>,
-            hal::gpio::Pin<hal::gpio::bank0::Gpio17, hal::gpio::Output<hal::gpio::PushPull>>,
+            Pin<CS, hal::gpio::Output<hal::gpio::PushPull>>,
         >,
         DummyTimesource,
     >,
@@ -39,7 +43,7 @@ pub struct SDCardController<'a> {
     volume: Volume,
 }
 
-impl SDCardController<'_> {
+impl<CS: PinId> SDCardController<'_, CS> {
     pub fn open(&mut self, filename: &str, mode: Mode) -> File {
         self.controller
             .open_file_in_dir(&mut self.volume, &self.root_dir, filename, mode)
@@ -54,7 +58,7 @@ impl SDCardController<'_> {
         self.controller.read(&self.volume, file, buf).unwrap()
     }
 
-    pub fn init(sdspi: &mut SDSpi) -> SDCardController {
+    pub fn init(sdspi: &mut SDSpi<CS>) -> SDCardController<CS> {
         // Next we need to aquire the block device and initialize the
         // communication with the SD card.
         let block = sdspi.acquire().unwrap();
@@ -76,20 +80,33 @@ impl SDCardController<'_> {
     }
 }
 
-type SDSpi = SdMmcSpi<
+type SDSpi<CS> = SdMmcSpi<
     hal::Spi<hal::spi::Enabled, pac::SPI0, 8>,
-    hal::gpio::Pin<hal::gpio::bank0::Gpio17, hal::gpio::Output<hal::gpio::PushPull>>,
+    Pin<CS, hal::gpio::Output<hal::gpio::PushPull>>,
 >;
 
-pub fn init_sd(
-    _spi_sclk: hal::gpio::Pin<hal::gpio::bank0::Gpio18, hal::gpio::FunctionSpi>,
-    _spi_mosi: hal::gpio::Pin<hal::gpio::bank0::Gpio19, hal::gpio::FunctionSpi>,
-    _spi_miso: hal::gpio::Pin<hal::gpio::bank0::Gpio16, hal::gpio::FunctionSpi>,
-    spi_csn: hal::gpio::Pin<hal::gpio::bank0::Gpio17, hal::gpio::PushPullOutput>,
+pub fn init_sd<
+    CLK: PinId + BankPinId,
+    MCLK: PinMode + ValidPinMode<CLK>,
+    MOSI: PinId + BankPinId,
+    MMOSI: PinMode + ValidPinMode<MOSI>,
+    MISO: PinId + BankPinId,
+    MMISO: PinMode + ValidPinMode<MISO>,
+    CS: PinId,
+    MCS: PinMode + ValidPinMode<CS>,
+>(
+    spi_sclk: Pin<CLK, MCLK>,
+    spi_mosi: Pin<MOSI, MMOSI>,
+    spi_miso: Pin<MISO, MMISO>,
+    spi_csn: Pin<CS, MCS>,
     spi: pac::SPI0,
     resets: &mut pac::RESETS,
     clocks: &hal::clocks::ClocksManager,
-) -> SDSpi {
+) -> SDSpi<CS> {
+    let _spi_sclk = spi_sclk.into_mode::<FunctionSpi>();
+    let _spi_mosi = spi_mosi.into_mode::<FunctionSpi>();
+    let _spi_miso = spi_miso.into_mode::<FunctionSpi>();
+
     let spi = hal::spi::Spi::<_, _, 8>::new(spi);
 
     let spi = spi.init(
@@ -99,5 +116,5 @@ pub fn init_sd(
         &embedded_hal::spi::MODE_0,
     );
 
-    SdMmcSpi::new(spi, spi_csn)
+    SdMmcSpi::new(spi, spi_csn.into_mode())
 }

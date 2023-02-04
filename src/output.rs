@@ -15,11 +15,14 @@ use rp_pico::hal::pio::Tx;
 use rp_pico::hal::pio::ValidStateMachine;
 use rp_pico::hal::prelude::*;
 
-pub fn setup_output(
+pub fn setup_output<
+    P: hal::gpio::PinId + hal::gpio::bank0::BankPinId,
+    M: hal::gpio::PinMode + hal::gpio::ValidPinMode<P>,
+>(
     pio: pac::PIO0,
     timer: pac::TIMER,
     resets: &mut pac::RESETS,
-    output_pin: hal::gpio::Pin<hal::gpio::bank0::Gpio15, hal::gpio::Disabled<hal::gpio::PullDown>>,
+    output_pin: hal::gpio::Pin<P, M>,
     consumer_queue: crate::queue::QueueConsumer,
 ) {
     let (mut pio0, sm0, _, _, _) = pio.split(resets);
@@ -28,8 +31,8 @@ pub fn setup_output(
     let program = pio_file!("./src/pwm.pio", select_program("pwm"));
     let installed = pio0.install(&program.program).unwrap();
 
-    let _pio_pin: hal::gpio::Pin<_, hal::gpio::FunctionPio0> = output_pin.into_mode();
-    let output_pin_id = 15; //led
+    let _pio_pin = output_pin.into_mode::<hal::gpio::FunctionPio0>();
+    let output_pin_id = P::DYN.num;
 
     // Build the pio program and set pin both for set and side set!
     // We are running with the default divider which is 1 (max speed)

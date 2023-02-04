@@ -108,10 +108,10 @@ fn main() -> ! {
     output::setup_output(pac.PIO0, pac.TIMER, &mut pac.RESETS, pins.gpio15, cons);
 
     let mut sd = sdcard::init_sd(
-        pins.gpio18.into_mode(),
-        pins.gpio19.into_mode(),
-        pins.gpio16.into_mode(),
-        pins.gpio17.into_mode(),
+        pins.gpio18,
+        pins.gpio19,
+        pins.gpio16,
+        pins.gpio17,
         pac.SPI0,
         &mut pac.RESETS,
         &clocks,
