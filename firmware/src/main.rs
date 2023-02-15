@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 #[allow(unused)]
 mod blink;
 mod config;
@@ -8,6 +10,8 @@ mod output;
 mod queue;
 mod sdcard;
 
+use acid_io::Read;
+use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
 //use defmt::info;
 //use defmt_rtt as _;
@@ -22,6 +26,16 @@ use panic_halt as _;
 use rp_pico::hal;
 use rp_pico::hal::pac;
 use rp_pico::hal::prelude::*;
+
+use embedded_alloc::Heap;
+
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
+
+//#[alloc_error_handler]
+//fn oom(_: Layout) -> ! {
+//    loop {}
+//}
 
 fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
     let period_samples = sample_rate / freq_hz;
@@ -52,6 +66,17 @@ fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
     })
 }
 
+struct ReadableFile<'a, 'b, CS: hal::gpio::PinId> {
+    fs: &'a mut sdcard::SDCardController<'b, CS>,
+    file: &'a mut embedded_sdmmc::File,
+}
+
+impl<'a, 'b, CS: hal::gpio::PinId> Read for ReadableFile<'a, 'b, CS> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, acid_io::Error> {
+        Ok(self.fs.read(&mut self.file, buf))
+    }
+}
+
 /// Entry point to our bare-metal application.
 ///
 /// The `#[entry]` macro ensures the Cortex-M start-up code calls this function
@@ -61,6 +86,14 @@ fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
 /// infinite loop.
 #[entry]
 fn main() -> ! {
+    // First thing: Initialize the allocator
+    {
+        use core::mem::MaybeUninit;
+        static mut HEAP_MEM: [MaybeUninit<u8>; config::HEAP_SIZE] =
+            [MaybeUninit::uninit(); config::HEAP_SIZE];
+        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
+    }
+
     let mut rb = queue::SampleQueue::default();
     let (mut prod, cons) = rb.split_ref();
     // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
@@ -103,7 +136,7 @@ fn main() -> ! {
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    //let mut led_pin = pins.led.into_push_pull_output();
+    let mut led_pin = pins.led.into_push_pull_output();
 
     output::setup_output(pac.PIO0, pac.TIMER, &mut pac.RESETS, pins.gpio15, cons);
 
@@ -118,37 +151,54 @@ fn main() -> ! {
     );
     let mut fs = sdcard::SDCardController::init(&mut sd);
 
-    let mut file = fs.open("bibi.bin", Mode::ReadOnly);
+    let mut f = fs.open("bb.flc", Mode::ReadOnly);
 
-    // ----------------------------------------------------------------------------
-    // Main loop! -----------------------------------------------------------------
-    // ----------------------------------------------------------------------------
+    {
+        let file = ReadableFile {
+            fs: &mut fs,
+            file: &mut f,
+        };
+        let Ok(mut file) = claxon::FlacReader::new(file) else {
+            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
+        };
+        let mut blocks = file.blocks();
 
-    //let mut data_fns = [
-    //    data(40_783, 100),
-    //    data(40_783, 200),
-    //    data(40_783, 400),
-    //    data(40_783, 800),
-    //];
-    //let mut data_fn_i = 0;
-    //let mut data = 0;
-    //let mut i = 0;
-    let mut buf = [0u8; 1024];
-    loop {
-        let read_count = fs.read(&mut file, &mut buf);
-        if read_count == 0 {
-            break;
+        // ----------------------------------------------------------------------------
+        // Main loop! -----------------------------------------------------------------
+        // ----------------------------------------------------------------------------
+
+        //let mut data_fns = [
+        //    data(40_783, 100),
+        //    data(40_783, 200),
+        //    data(40_783, 400),
+        //    data(40_783, 800),
+        //];
+        //let mut data_fn_i = 0;
+        //let mut data = 0;
+        //let mut i = 0;
+        let mut buf = alloc::vec::Vec::with_capacity(1024);
+        loop {
+            let Ok(frame) = blocks.read_next_or_eof(core::mem::take(&mut buf)) else {
+                blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
+            };
+            let Some(frame) = frame else {
+                break;
+            };
+            let channel = frame.channel(0); // We only have mono files here
+
+            for v in channel {
+                let sample = (v + 128) as u8;
+                while prod.push(sample).is_err() {}
+            }
+
+            buf = frame.into_buffer();
+
+            led_pin.set_high().unwrap();
+
+            //delay.delay_ms(20);
         }
-        let mut begin = 0;
-        let end = read_count;
-        while begin < end {
-            let pushed = prod.push_slice(&buf[begin..end]);
-            begin += pushed;
-        }
-
-        //delay.delay_ms(20);
     }
-    fs.close(file);
+    fs.close(f);
 
     let mut data_fns = [
         data(40_783, 100),
