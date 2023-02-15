@@ -11,6 +11,40 @@ use symphonia::core::{
     probe::Hint,
 };
 
+struct Resampler {
+    source_sample_counter: u64,
+    source_sample_rate: u64,
+    sink_sample_counter: u64,
+    sink_sample_rate: u64,
+}
+
+impl Resampler {
+    fn new(source_sample_rate: u64, sink_sample_rate: u64) -> Self {
+        Resampler {
+            source_sample_counter: 0,
+            source_sample_rate,
+            sink_sample_counter: 0,
+            sink_sample_rate,
+        }
+    }
+
+    fn resample_nearest(&mut self, input: &[i32]) -> Vec<i32> {
+        let mut output = Vec::new();
+        for l in input {
+            self.source_sample_counter += 1;
+
+            let new_sink_sample_counter = self.source_sample_counter * self.sink_sample_rate as u64
+                / self.source_sample_rate as u64;
+
+            for _ in 0..(new_sink_sample_counter - self.sink_sample_counter) {
+                output.push(*l);
+            }
+            self.sink_sample_counter = new_sink_sample_counter;
+        }
+        output
+    }
+}
+
 #[derive(Parser, Debug)] // requires `derive` feature
 #[command()] // Just to make testing across clap features easier
 struct Args {
@@ -28,6 +62,8 @@ fn main() {
     let out_file = File::create(args.file.with_extension("flc").file_name().unwrap()).unwrap();
     let mut out_file = std::io::BufWriter::new(out_file);
 
+    let target_sample_rate = 40000;
+
     {
         let mut outw = WriteWrapper(&mut out_file);
         let mut enc = FlacEncoder::new()
@@ -35,7 +71,7 @@ fn main() {
             .compression_level(8)
             .channels(1)
             .bits_per_sample(8)
-            .sample_rate(40000)
+            .sample_rate(target_sample_rate)
             .verify(true)
             .init_write(&mut outw)
             .unwrap();
@@ -67,6 +103,10 @@ fn main() {
             .iter()
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
             .expect("no supported audio tracks");
+
+        let input_sample_rate = track.codec_params.sample_rate.unwrap();
+
+        let mut resampler = Resampler::new(input_sample_rate as _, target_sample_rate as _);
 
         // Use the default options for the decoder.
         let dec_opts: DecoderOptions = Default::default();
@@ -129,7 +169,8 @@ fn main() {
                         }
                         o => panic!("Unsupported number of channels: {}", o),
                     }
-                    enc.process(&[&out_buf[..]]).unwrap();
+                    let resampled = resampler.resample_nearest(out_buf.as_slice());
+                    enc.process(&[resampled.as_slice()]).unwrap();
 
                     //out_file.write_all(out_buf).unwrap();
                     println!("Written {} samples", out_buf.len());
