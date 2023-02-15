@@ -193,8 +193,6 @@ fn main() -> ! {
 
             buf = frame.into_buffer();
 
-            led_pin.set_high().unwrap();
-
             //delay.delay_ms(20);
         }
     }
