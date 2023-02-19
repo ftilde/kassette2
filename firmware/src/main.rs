@@ -153,6 +153,16 @@ fn main() -> ! {
 
     let mut f = fs.open("bb.flc", Mode::ReadOnly);
 
+    let mut data_fns = [
+        data(40_783, 100),
+        data(40_783, 200),
+        data(40_783, 400),
+        data(40_783, 800),
+    ];
+    let mut data_fn_i = 0;
+    let mut data = 0;
+    let mut i = 0;
+
     {
         let file = ReadableFile {
             fs: &mut fs,
@@ -177,6 +187,7 @@ fn main() -> ! {
         //let mut data = 0;
         //let mut i = 0;
         let mut buf = alloc::vec::Vec::with_capacity(1024);
+        let sin_test = true;
         loop {
             let Ok(frame) = blocks.read_next_or_eof(core::mem::take(&mut buf)) else {
                 blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
@@ -187,7 +198,17 @@ fn main() -> ! {
             let channel = frame.channel(0); // We only have mono files here
 
             for v in channel {
-                let sample = (v + 128) as u8;
+                let sample = if sin_test {
+                    let sample = data_fns[data_fn_i].next().unwrap().min(MAX_VALUE as u8);
+                    i += 1;
+                    if i == 40000 {
+                        i = 0;
+                        data_fn_i = (data_fn_i + 1) % data_fns.len();
+                    }
+                    sample
+                } else {
+                    (v + 128) as u8
+                };
                 while prod.push(sample).is_err() {}
             }
 
@@ -197,16 +218,6 @@ fn main() -> ! {
         }
     }
     fs.close(f);
-
-    let mut data_fns = [
-        data(40_783, 100),
-        data(40_783, 200),
-        data(40_783, 400),
-        data(40_783, 800),
-    ];
-    let mut data_fn_i = 0;
-    let mut data = 0;
-    let mut i = 0;
     loop {
         while prod.push(data).is_ok() {
             data = data_fns[data_fn_i].next().unwrap().min(MAX_VALUE as u8);
