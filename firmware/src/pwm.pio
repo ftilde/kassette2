@@ -1,52 +1,61 @@
 .program pwm
 .side_set 1 opt
 
-    out x, 8
-    mov y, isr       side 0
-countloop0:
-    jmp x!=y noset0
-    jmp skip0        side 1
-noset0:
-    nop
-skip0:
-    jmp y-- countloop0
+    out isr, 8       side 0
+    out y, 8         side 1
 
-    mov y, isr       side 0
-countloop1:
-    jmp x!=y noset1
-    jmp skip1        side 1
-noset1:
-    nop
-skip1:
-    jmp y-- countloop1
+    mov x, isr       side 0
+counton0:
+    jmp x-- counton0;
+    mov x, y         side 1
+countoff0:
+    jmp x-- countoff0;
 
-    mov y, isr       side 0
-countloop2:
-    jmp x!=y noset2
-    jmp skip2        side 1
-noset2:
-    nop
-skip2:
-    jmp y-- countloop2
+    mov x, isr       side 0
+counton1:
+    jmp x-- counton1;
+    mov x, y         side 1
+countoff1:
+    jmp x-- countoff1;
 
-    mov y, isr       side 0
-countloop3:
-    jmp x!=y noset3
-    jmp skip3        side 1
-noset3:
-    nop
-skip3:
-    jmp y-- countloop3
+    mov x, isr       side 0
+counton2:
+    jmp x-- counton2;
+    mov x, y         side 1
+countoff2:
+    jmp x-- countoff2;
 
-;.program pwm
-;.side_set 1 opt
-;
-;    pull
-;    mov x, osr
-;    mov y, isr
-;    jmp !x foo
-;    jmp done         side 1
-;foo:
-;    nop              side 0
-;done:
-;    jmp y-- done
+    mov x, isr       side 0
+counton3:
+    jmp x-- counton3;
+    mov x, y         side 1
+countoff3:
+    jmp x-- countoff3;
+
+    mov x, isr       side 0
+counton4:
+    jmp x-- counton4;
+    mov x, y         side 1
+countoff4:
+    jmp x-- countoff4;
+
+    mov x, isr       side 0
+counton5:
+    jmp x-- counton5;
+    mov x, y         side 1
+countoff5:
+    jmp x-- countoff5;
+
+    mov x, isr       side 0
+counton6:
+    jmp x-- counton6;
+    mov x, y         side 1
+countoff6:
+    jmp x-- countoff6;
+
+;    mov x, isr       side 0
+;countonX:
+;    jmp x-- countonX;
+;    mov x, y         side 1
+;countoffX:
+;    jmp x-- countoffX;

@@ -187,7 +187,7 @@ fn main() -> ! {
         //let mut data = 0;
         //let mut i = 0;
         let mut buf = alloc::vec::Vec::with_capacity(1024);
-        let sin_test = true;
+        let sin_test = false;
         loop {
             let Ok(frame) = blocks.read_next_or_eof(core::mem::take(&mut buf)) else {
                 blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);

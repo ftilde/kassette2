@@ -54,7 +54,7 @@ pub fn setup_output<
     pio_pwm_set_period(sm, &mut tx, crate::MAX_VALUE);
 
     let mut timer = hal::Timer::new(timer, resets);
-    let queue_fill_period = 700u32.micros(); //< 32 samples/44kHz
+    let queue_fill_period = 150u32.micros(); //< 32 samples/44kHz
     crate::queue::setup_timer_interrupt(&mut timer, queue_fill_period, consumer_queue, tx);
 }
 
