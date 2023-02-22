@@ -151,7 +151,7 @@ fn main() -> ! {
     );
     let mut fs = sdcard::SDCardController::init(&mut sd);
 
-    let mut f = fs.open("bb.flc", Mode::ReadOnly);
+    let mut f = fs.open("blk138.flc", Mode::ReadOnly);
 
     let mut data_fns = [
         data(40_783, 100),

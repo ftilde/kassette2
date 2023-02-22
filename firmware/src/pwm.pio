@@ -1,61 +1,23 @@
+.define NUM_ITER 12
 .program pwm
 .side_set 1 opt
 
-    out isr, 8       side 0
-    out y, 8         side 1
+    pull            side 0
+    out isr, 16
+    out x, 16
+    mov osr x
 
-    mov x, isr       side 0
-counton0:
-    jmp x-- counton0;
-    mov x, y         side 1
-countoff0:
-    jmp x-- countoff0;
+    set y (NUM_ITER-1)
+iter_loop:
 
-    mov x, isr       side 0
-counton1:
-    jmp x-- counton1;
-    mov x, y         side 1
-countoff1:
-    jmp x-- countoff1;
+    mov x, isr      side 0
+counton:
+    jmp x-- counton
 
-    mov x, isr       side 0
-counton2:
-    jmp x-- counton2;
-    mov x, y         side 1
-countoff2:
-    jmp x-- countoff2;
+    mov x, osr      side 1
+countoff:
+    jmp x-- countoff
 
-    mov x, isr       side 0
-counton3:
-    jmp x-- counton3;
-    mov x, y         side 1
-countoff3:
-    jmp x-- countoff3;
+    jmp y-- iter_loop
 
-    mov x, isr       side 0
-counton4:
-    jmp x-- counton4;
-    mov x, y         side 1
-countoff4:
-    jmp x-- countoff4;
-
-    mov x, isr       side 0
-counton5:
-    jmp x-- counton5;
-    mov x, y         side 1
-countoff5:
-    jmp x-- countoff5;
-
-    mov x, isr       side 0
-counton6:
-    jmp x-- counton6;
-    mov x, y         side 1
-countoff6:
-    jmp x-- countoff6;
-
-;    mov x, isr       side 0
-;countonX:
-;    jmp x-- countonX;
-;    mov x, y         side 1
-;countoffX:
-;    jmp x-- countoffX;
+    out null, 32

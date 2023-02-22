@@ -40,7 +40,7 @@ pub fn setup_output<
         .set_pins(output_pin_id, 1)
         .side_set_pin_base(output_pin_id)
         .clock_divisor_fixed_point(1, 0)
-        .autopull(true)
+        .autopull(false)
         .buffers(hal::pio::Buffers::OnlyTx) // Increase queue size to a whopping 8*4=32 samples
         .build(sm0);
 
@@ -54,7 +54,7 @@ pub fn setup_output<
     pio_pwm_set_period(sm, &mut tx, crate::MAX_VALUE);
 
     let mut timer = hal::Timer::new(timer, resets);
-    let queue_fill_period = 150u32.micros(); //< 32 samples/44kHz
+    let queue_fill_period = 50u32.micros(); //< 32 samples/44kHz
     crate::queue::setup_timer_interrupt(&mut timer, queue_fill_period, consumer_queue, tx);
 }
 
