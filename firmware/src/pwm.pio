@@ -2,22 +2,22 @@
 .program pwm
 .side_set 1 opt
 
-    pull            side 0
-    out isr, 16
-    out x, 16
-    mov osr x
+    out x, 8
+    mov isr !x
 
     set y (NUM_ITER-1)
 iter_loop:
 
-    mov x, isr      side 0
+    mov x !isr      side 0
+    mov isr !null
+    in x, 8
 counton:
     jmp x-- counton
 
-    mov x, osr      side 1
+    mov x !isr      side 1
+    mov isr !null
+    in x, 8
 countoff:
     jmp x-- countoff
 
     jmp y-- iter_loop
-
-    out null, 32

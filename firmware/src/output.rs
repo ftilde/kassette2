@@ -39,8 +39,9 @@ pub fn setup_output<
     let (mut sm, _, mut tx) = hal::pio::PIOBuilder::from_program(installed)
         .set_pins(output_pin_id, 1)
         .side_set_pin_base(output_pin_id)
+        .out_shift_direction(hal::pio::ShiftDirection::Right)
         .clock_divisor_fixed_point(1, 0)
-        .autopull(false)
+        .autopull(true)
         .buffers(hal::pio::Buffers::OnlyTx) // Increase queue size to a whopping 8*4=32 samples
         .build(sm0);
 

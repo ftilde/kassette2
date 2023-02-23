@@ -67,11 +67,10 @@ fn TIMER_IRQ_0() {
     };
 
     while !data.pio_tx.is_full() {
-        let mut d = [127u8; 1];
+        let mut d = [127u8; 4];
         data.queue_input.pop_slice(&mut d);
 
-        let out_d = [255 - d[0], 0, d[0], 0];
-        data.pio_tx.write(bytemuck::cast(out_d));
+        data.pio_tx.write(u32::from_le_bytes(d));
     }
 
     data.alarm.clear_interrupt();
