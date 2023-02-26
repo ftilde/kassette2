@@ -124,6 +124,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "config"
+version = "0.1.0"
+
+[[package]]
 name = "cortex-m"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -337,6 +341,7 @@ dependencies = [
  "acid_io",
  "bytemuck",
  "claxon",
+ "config",
  "cortex-m",
  "cortex-m-rt",
  "embedded-alloc",

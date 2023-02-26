@@ -1,5 +1,3 @@
-use fugit::ExtU32;
-
 use pio_proc::pio_file;
 use rp_pico::hal;
 use rp_pico::hal::pac;
@@ -44,6 +42,5 @@ pub fn setup_output<
     let _sm = sm.start();
 
     let mut timer = hal::Timer::new(timer, resets);
-    let queue_fill_period = 50u32.micros(); //< 32 samples/44kHz
-    crate::queue::setup_timer_interrupt(&mut timer, queue_fill_period, consumer_queue, tx);
+    crate::queue::setup_timer_interrupt(&mut timer, consumer_queue, tx);
 }

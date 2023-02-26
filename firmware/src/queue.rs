@@ -2,6 +2,7 @@ use core::cell::RefCell;
 
 use cortex_m::interrupt::Mutex;
 
+use fugit::ExtU32;
 use rp_pico::hal;
 use rp_pico::hal::pac;
 
@@ -11,14 +12,13 @@ use pac::interrupt;
 use rp_pico::hal::timer::Alarm;
 use rp_pico::hal::timer::Alarm0;
 
-pub type SampleQueue = ringbuf::StaticRb<u16, { crate::config::SAMPLE_QUEUE_SIZE }>;
+pub type SampleQueue = ringbuf::StaticRb<u16, { config::SAMPLE_QUEUE_SIZE }>;
 pub type QueueConsumer = ringbuf::consumer::Consumer<u16, &'static SampleQueue>;
 //type QueueProducer = ringbuf::producer::Producer<[u8; 4], &'static SampleQueue>;
 type PioTx = hal::pio::Tx<(pac::PIO0, SM0)>;
 
 struct TimerIrqData {
     alarm: Alarm0,
-    period: fugit::MicrosDurationU32,
     queue_input: QueueConsumer,
     pio_tx: PioTx,
     //led: LedPin,
@@ -27,7 +27,6 @@ static TIMER_IRQ_DATA: Mutex<RefCell<Option<TimerIrqData>>> = Mutex::new(RefCell
 
 pub fn setup_timer_interrupt(
     timer: &mut hal::Timer,
-    period: fugit::MicrosDurationU32,
     queue_input: QueueConsumer,
     pio_tx: PioTx,
     //led: LedPin,
@@ -38,11 +37,10 @@ pub fn setup_timer_interrupt(
 
     let mut alarm0 = timer.alarm_0().unwrap();
     alarm0.enable_interrupt();
-    alarm0.schedule(period).unwrap();
+    alarm0.schedule(1000u32.micros()).unwrap();
     cortex_m::interrupt::free(|cs| {
         TIMER_IRQ_DATA.borrow(cs).replace(Some(TimerIrqData {
             alarm: alarm0,
-            period,
             queue_input,
             pio_tx,
             //led,
@@ -67,7 +65,7 @@ fn TIMER_IRQ_0() {
     };
 
     while !data.pio_tx.is_full() {
-        let mut d = [1u16 << (crate::config::BITS_PER_SAMPLE - 1); 2];
+        let mut d = [config::ZERO_SAMPLE; 2];
         data.queue_input.pop_slice(&mut d);
 
         let d = d[0] as u32 | ((d[1] as u32) << 16);
@@ -76,5 +74,7 @@ fn TIMER_IRQ_0() {
     }
 
     data.alarm.clear_interrupt();
-    data.alarm.schedule(data.period).unwrap();
+    data.alarm
+        .schedule(config::QUEUE_FILL_PERIOD_US.micros())
+        .unwrap();
 }

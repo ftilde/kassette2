@@ -62,11 +62,11 @@ fn main() {
     let out_file = File::create(args.file.with_extension("flc").file_name().unwrap()).unwrap();
     let mut out_file = std::io::BufWriter::new(out_file);
 
-    let target_sample_rate = 40000;
+    let target_sample_rate = config::SAMPLE_RATE;
 
-    let bits = 10;
-    let format_bits = 16;
-    assert!(format_bits > bits);
+    let bits = config::BITS_PER_SAMPLE as u32;
+    let format_bits = config::FORMAT_BITS_PER_SAMPLE as u32;
+    assert!(format_bits >= bits);
 
     {
         // Create the media source stream.

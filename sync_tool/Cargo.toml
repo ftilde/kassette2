@@ -9,3 +9,4 @@ edition = "2021"
 symphonia = "0.5.2"
 clap = {version = "4.1.4", features=["derive"]}
 flac-bound = "0.3.0" #TODO: Put into build.rs: ln -s /usr/lib/libFLAC.so target/debug/deps/libflac.so
+config = { path = "../config"}

@@ -5,7 +5,6 @@ extern crate alloc;
 
 #[allow(unused)]
 mod blink;
-mod config;
 mod output;
 mod queue;
 mod sdcard;
@@ -37,15 +36,15 @@ static HEAP: Heap = Heap::empty();
 //    loop {}
 //}
 
-fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u16> {
-    let period_samples = sample_rate / freq_hz;
+fn data(freq_hz: u32) -> impl Iterator<Item = u16> {
+    let period_samples = config::SAMPLE_RATE / freq_hz;
     let mut i: u32 = 0;
-    const RANGE: u32 = 1 << crate::config::BITS_PER_SAMPLE;
+    const RANGE: u32 = 1 << config::BITS_PER_SAMPLE;
     let sin_table: [u16; RANGE as usize] = core::array::from_fn(|i| {
         let f = i as f32 * core::f32::consts::TAU / (RANGE as f32);
         use micromath::F32Ext;
-        let val = (((-f32::cos(f) + 1.0) * 0.5) * crate::config::MAX_SAMPLE as f32) as u32;
-        val.min(crate::config::MAX_SAMPLE as u32) as u16
+        let val = (((-f32::cos(f) + 1.0) * 0.5) * config::MAX_SAMPLE as f32) as u32;
+        val.min(config::MAX_SAMPLE as u32) as u16
     });
     core::iter::from_fn(move || {
         //let f = i as f32 * core::f32::consts::TAU / (period_samples as f32);
@@ -152,14 +151,9 @@ fn main() -> ! {
     );
     let mut fs = sdcard::SDCardController::init(&mut sd);
 
-    let mut f = fs.open("blk138.flc", Mode::ReadOnly);
+    let mut f = fs.open("bb.flc", Mode::ReadOnly);
 
-    let mut data_fns = [
-        data(40_783, 100),
-        data(40_783, 200),
-        data(40_783, 400),
-        data(40_783, 800),
-    ];
+    let mut data_fns = [data(100), data(200), data(400), data(800)];
     let mut data_fn_i = 0;
     let mut data = 0;
     let mut i = 0;
@@ -178,15 +172,6 @@ fn main() -> ! {
         // Main loop! -----------------------------------------------------------------
         // ----------------------------------------------------------------------------
 
-        //let mut data_fns = [
-        //    data(40_783, 100),
-        //    data(40_783, 200),
-        //    data(40_783, 400),
-        //    data(40_783, 800),
-        //];
-        //let mut data_fn_i = 0;
-        //let mut data = 0;
-        //let mut i = 0;
         let mut buf = alloc::vec::Vec::with_capacity(1024);
         let sin_test = false;
         loop {
@@ -208,8 +193,8 @@ fn main() -> ! {
                     }
                     sample
                 } else {
-                    ((v >> (16 - crate::config::BITS_PER_SAMPLE))
-                        + crate::config::ZERO_SAMPLE as i32) as u16
+                    ((v >> (config::FORMAT_BITS_PER_SAMPLE - config::BITS_PER_SAMPLE))
+                        + config::ZERO_SAMPLE as i32) as u16
                 };
                 while prod.push(sample).is_err() {}
             }

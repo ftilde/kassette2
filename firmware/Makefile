@@ -4,7 +4,7 @@ ELF2UF2=${HOME}/.cargo/bin/elf2uf2-rs #install with `cargo install --locked elf2
 
 all: ${ELF}
 
-${ELF}: src/*.rs src/*.pio
+${ELF}: src/*.rs src/*.pio ../config/src/*.rs
 	cargo build --release
 
 .PHONY: flash
