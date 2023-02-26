@@ -199,7 +199,7 @@ fn main() -> ! {
 
             for v in channel {
                 let sample = if sin_test {
-                    let sample = data_fns[data_fn_i].next().unwrap().min(MAX_VALUE as u8);
+                    let sample = data_fns[data_fn_i].next().unwrap();
                     i += 1;
                     if i == 40000 {
                         i = 0;
@@ -220,7 +220,7 @@ fn main() -> ! {
     fs.close(f);
     loop {
         while prod.push(data).is_ok() {
-            data = data_fns[data_fn_i].next().unwrap().min(MAX_VALUE as u8);
+            data = data_fns[data_fn_i].next().unwrap();
             i += 1;
             if i == 40000 {
                 i = 0;
@@ -230,5 +230,3 @@ fn main() -> ! {
         delay.delay_ms(20);
     }
 }
-
-const MAX_VALUE: u32 = u8::MAX as u32 - 1;
