@@ -64,18 +64,11 @@ fn main() {
 
     let target_sample_rate = 40000;
 
-    {
-        let mut outw = WriteWrapper(&mut out_file);
-        let mut enc = FlacEncoder::new()
-            .unwrap()
-            .compression_level(8)
-            .channels(1)
-            .bits_per_sample(8)
-            .sample_rate(target_sample_rate)
-            .verify(true)
-            .init_write(&mut outw)
-            .unwrap();
+    let bits = 10;
+    let format_bits = 16;
+    assert!(format_bits > bits);
 
+    {
         // Create the media source stream.
         let mss = MediaSourceStream::new(Box::new(src), Default::default());
 
@@ -105,6 +98,20 @@ fn main() {
             .expect("no supported audio tracks");
 
         let input_sample_rate = track.codec_params.sample_rate.unwrap();
+
+        //let target_sample_rate = input_sample_rate;
+
+        let mut outw = WriteWrapper(&mut out_file);
+        let mut enc = FlacEncoder::new()
+            .unwrap()
+            .compression_level(8)
+            .channels(1)
+            .bits_per_sample(format_bits)
+            .streamable_subset(false)
+            .sample_rate(target_sample_rate)
+            .verify(true)
+            .init_write(&mut outw)
+            .unwrap();
 
         let mut resampler = Resampler::new(input_sample_rate as _, target_sample_rate as _);
 
@@ -151,25 +158,32 @@ fn main() {
             match decoder.decode(&packet) {
                 Ok(decoded) => {
                     let num_channels = decoded.spec().channels.count();
-                    let mut buf = decoded.make_equivalent::<i8>();
+                    let mut buf = decoded.make_equivalent::<i32>();
+
                     decoded.convert(&mut buf);
                     let mut out_buf = Vec::with_capacity(buf.frames());
                     match num_channels {
                         1 => {
                             for v in buf.chan(0) {
-                                out_buf.push(*v as i32);
+                                out_buf.push(*v);
                             }
                         }
                         2 => {
                             let (l, r) = buf.chan_pair_mut(0, 1);
                             for (l, r) in l.iter().zip(r.iter()) {
-                                let sum = *l as i32 + *r as i32;
-                                out_buf.push(sum >> 1);
+                                let sum = *l as i64 + *r as i64;
+                                out_buf.push((sum >> 1) as _);
                             }
                         }
                         o => panic!("Unsupported number of channels: {}", o),
                     }
-                    let resampled = resampler.resample_nearest(out_buf.as_slice());
+                    let mut resampled = resampler.resample_nearest(out_buf.as_slice());
+
+                    let right_shift_amount = 32 - bits;
+                    let left_shift_amount = format_bits - bits;
+                    for sample in &mut resampled {
+                        *sample = (*sample >> right_shift_amount) << left_shift_amount;
+                    }
                     enc.process(&[resampled.as_slice()]).unwrap();
 
                     //out_file.write_all(out_buf).unwrap();

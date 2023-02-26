@@ -11,7 +11,7 @@ mod queue;
 mod sdcard;
 
 use acid_io::Read;
-use embedded_hal::digital::v2::OutputPin;
+//use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
 //use defmt::info;
 //use defmt_rtt as _;
@@ -37,14 +37,15 @@ static HEAP: Heap = Heap::empty();
 //    loop {}
 //}
 
-fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
+fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u16> {
     let period_samples = sample_rate / freq_hz;
     let mut i: u32 = 0;
-    let sin_table: [u8; 256] = core::array::from_fn(|i| {
-        let f = i as f32 * core::f32::consts::TAU / 256.0;
+    const RANGE: u32 = 1 << crate::config::BITS_PER_SAMPLE;
+    let sin_table: [u16; RANGE as usize] = core::array::from_fn(|i| {
+        let f = i as f32 * core::f32::consts::TAU / (RANGE as f32);
         use micromath::F32Ext;
-        let val = (((-f32::cos(f) + 1.0) * 0.5) * u8::MAX as f32) as u32;
-        val.min(255) as u8
+        let val = (((-f32::cos(f) + 1.0) * 0.5) * crate::config::MAX_SAMPLE as f32) as u32;
+        val.min(crate::config::MAX_SAMPLE as u32) as u16
     });
     core::iter::from_fn(move || {
         //let f = i as f32 * core::f32::consts::TAU / (period_samples as f32);
@@ -58,11 +59,11 @@ fn data(sample_rate: u32, freq_hz: u32) -> impl Iterator<Item = u8> {
         //    val = 0;
         //}
 
-        val = (i * 256 / period_samples) % 256;
+        val = (i * RANGE / period_samples) % RANGE;
         let val = sin_table[val as usize];
 
         i += 1;
-        Some(val as u8)
+        Some(val as u16)
     })
 }
 
@@ -207,7 +208,8 @@ fn main() -> ! {
                     }
                     sample
                 } else {
-                    (v + 128) as u8
+                    ((v >> (16 - crate::config::BITS_PER_SAMPLE))
+                        + crate::config::ZERO_SAMPLE as i32) as u16
                 };
                 while prod.push(sample).is_err() {}
             }

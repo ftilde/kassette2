@@ -11,8 +11,8 @@ use pac::interrupt;
 use rp_pico::hal::timer::Alarm;
 use rp_pico::hal::timer::Alarm0;
 
-pub type SampleQueue = ringbuf::StaticRb<u8, { crate::config::SAMPLE_QUEUE_SIZE }>;
-pub type QueueConsumer = ringbuf::consumer::Consumer<u8, &'static SampleQueue>;
+pub type SampleQueue = ringbuf::StaticRb<u16, { crate::config::SAMPLE_QUEUE_SIZE }>;
+pub type QueueConsumer = ringbuf::consumer::Consumer<u16, &'static SampleQueue>;
 //type QueueProducer = ringbuf::producer::Producer<[u8; 4], &'static SampleQueue>;
 type PioTx = hal::pio::Tx<(pac::PIO0, SM0)>;
 
@@ -67,10 +67,12 @@ fn TIMER_IRQ_0() {
     };
 
     while !data.pio_tx.is_full() {
-        let mut d = [127u8; 4];
+        let mut d = [1u16 << (crate::config::BITS_PER_SAMPLE - 1); 2];
         data.queue_input.pop_slice(&mut d);
 
-        data.pio_tx.write(u32::from_le_bytes(d));
+        let d = d[0] as u32 | ((d[1] as u32) << 16);
+
+        data.pio_tx.write(d);
     }
 
     data.alarm.clear_interrupt();

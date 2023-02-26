@@ -1,18 +1,10 @@
 use fugit::ExtU32;
 
-use pio::Instruction;
-use pio::InstructionOperands;
-use pio::OutDestination;
 use pio_proc::pio_file;
 use rp_pico::hal;
 use rp_pico::hal::pac;
 
 // Import pio crates
-use hal::pio::SM0;
-use rp_pico::hal::pio::Running;
-use rp_pico::hal::pio::StateMachine;
-use rp_pico::hal::pio::Tx;
-use rp_pico::hal::pio::ValidStateMachine;
 use rp_pico::hal::prelude::*;
 
 pub fn setup_output<

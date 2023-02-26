@@ -1,8 +1,9 @@
-.define NUM_ITER 12
+.define NUM_ITER 3
+.define BITS_PER_SAMPLE 10
 .program pwm
 .side_set 1 opt
 
-    out x, 8
+    out x, 16
     mov isr !x
 
     set y (NUM_ITER-1)
@@ -10,13 +11,13 @@ iter_loop:
 
     mov x !isr      side 0
     mov isr !null
-    in x, 8
+    in x, BITS_PER_SAMPLE
 counton:
     jmp x-- counton
 
     mov x !isr      side 1
     mov isr !null
-    in x, 8
+    in x, BITS_PER_SAMPLE
 countoff:
     jmp x-- countoff
 
