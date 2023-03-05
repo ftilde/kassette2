@@ -154,11 +154,19 @@ dependencies = [
 name = "id_reader"
 version = "0.1.0"
 dependencies = [
+ "embedded-hal",
+ "mfrc522",
+]
+
+[[package]]
+name = "id_reader_firmware"
+version = "0.1.0"
+dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "embedded-hal",
  "fugit",
- "mfrc522",
+ "id_reader",
  "nb 1.0.0",
  "panic-halt",
  "rp-pico",
