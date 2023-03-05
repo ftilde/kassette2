@@ -18,5 +18,7 @@ cortex-m-rt = "0.7.2"
 # Panic behaviour, see https://crates.io/keywords/panic-impl for alternatives
 panic-halt = "0.2.0"
 rp-pico = "0.6"
-mfrc522 = "0.4.1"
 fugit = "0.3.6"
+mfrc522 = "0.4.1"
+usb-device = "0.2.9"
+usbd-serial = "0.1.1"

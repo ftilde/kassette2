@@ -3,6 +3,7 @@
 
 use embedded_hal::blocking::spi;
 use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::digital::v2::PinState;
 use rp_pico::entry;
 
 // Ensure we halt the program on panic (if we don't mention this crate it won't
@@ -15,7 +16,18 @@ use rp_pico::hal::pac;
 use rp_pico::hal::prelude::*;
 use rp_pico::hal::Spi;
 
+use usb_device::class_prelude::*;
+use usb_device::prelude::*;
+use usbd_serial::*;
+
 use fugit::RateExtU32;
+
+fn toggle(s: PinState) -> PinState {
+    match s {
+        PinState::Low => PinState::High,
+        PinState::High => PinState::Low,
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Id([u8; 4]);
@@ -48,8 +60,9 @@ where
             last_state: None,
         }
     }
-    fn poll_event(&mut self) -> Option<IdReaderEvent> {
+    fn poll_event(&mut self, p: &mut dyn core::fmt::Write) -> Option<IdReaderEvent> {
         if let Ok(a) = self.device.reqa() {
+            let _ = write!(p, "jou\r\n");
             if let Ok(n_uid) = self.device.select(&a) {
                 let n_id = unpack_uid(n_uid);
                 return match self.last_state {
@@ -60,12 +73,31 @@ where
                     }
                 };
             }
+        } else {
+            let _ = write!(p, "nope\r\n");
         }
         self.last_state = None;
         match self.last_state {
             Some(_) => Some(IdReaderEvent::Removed),
             None => None,
         }
+    }
+}
+
+struct SerialOut<'a, 'b, B>
+where
+    B: UsbBus,
+{
+    serial: &'a mut SerialPort<'b, B>,
+}
+
+impl<'a, 'b, B> core::fmt::Write for SerialOut<'a, 'b, B>
+where
+    B: UsbBus,
+{
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let _ = self.serial.write(s.as_bytes());
+        Ok(())
     }
 }
 
@@ -96,6 +128,22 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
+    //USB
+    let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
+        pac.USBCTRL_REGS,
+        pac.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut pac.RESETS,
+    ));
+
+    let mut serial = SerialPort::new(&usb_bus);
+
+    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+        .product("Serial port")
+        .device_class(USB_CLASS_CDC)
+        .build();
+
     let spi: Spi<_, _, 8> = Spi::new(pac.SPI1).init(
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
@@ -119,14 +167,22 @@ fn main() -> ! {
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let mut led_pin = pins.led.into_push_pull_output();
-    led_pin.set_high().unwrap();
+    let mut pin_state = PinState::Low;
+    led_pin.set_state(pin_state).unwrap();
     loop {
-        if let Some(e) = id_reader.poll_event() {
+        if !usb_dev.poll(&mut [&mut serial]) {
+            continue;
+        }
+
+        let mut out = SerialOut {
+            serial: &mut serial,
+        };
+
+        if let Some(e) = id_reader.poll_event(&mut out) {
             match e {
                 IdReaderEvent::New(_id) => led_pin.set_high().unwrap(),
                 IdReaderEvent::Removed => led_pin.set_low().unwrap(),
             }
         }
-        delay.delay_ms(500);
     }
 }
