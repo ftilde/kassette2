@@ -3,7 +3,6 @@
 
 use embedded_hal::blocking::spi;
 use embedded_hal::digital::v2::OutputPin;
-use embedded_hal::digital::v2::PinState;
 use rp_pico::entry;
 
 // Ensure we halt the program on panic (if we don't mention this crate it won't
@@ -22,18 +21,36 @@ use usbd_serial::*;
 
 use fugit::RateExtU32;
 
-fn toggle(s: PinState) -> PinState {
-    match s {
-        PinState::Low => PinState::High,
-        PinState::High => PinState::Low,
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Id([u8; 4]);
 
+fn fmt_nibble(nibble: u8) -> u8 {
+    if nibble < 10 {
+        nibble + b'0'
+    } else {
+        nibble - 10 + b'A'
+    }
+}
+
+fn fmt_byte_to_nibbles(v: u8) -> [u8; 2] {
+    let n_high = v >> 4;
+    let n_low = v & 0xf;
+    [fmt_nibble(n_high), fmt_nibble(n_low)]
+}
+
+impl core::fmt::Display for Id {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for b in &self.0 {
+            let nibbles = fmt_byte_to_nibbles(*b);
+            f.write_str(unsafe { core::str::from_utf8_unchecked(&nibbles) })?;
+            write!(f, " ")?;
+        }
+        Ok(())
+    }
+}
+
 struct IdReader<SPI, NSS> {
-    last_state: Option<Id>,
+    prev_state: Option<Id>,
     device: mfrc522::Mfrc522<SPI, NSS>,
 }
 
@@ -57,27 +74,25 @@ where
         let device = mfrc522::Mfrc522::with_nss(spi, nss).unwrap();
         Self {
             device,
-            last_state: None,
+            prev_state: None,
         }
     }
-    fn poll_event(&mut self, p: &mut dyn core::fmt::Write) -> Option<IdReaderEvent> {
-        if let Ok(a) = self.device.reqa() {
-            let _ = write!(p, "jou\r\n");
+    fn poll_event(&mut self) -> Option<IdReaderEvent> {
+        let prev_id = self.prev_state.take();
+        // For some reason, the second `reqa` after a `select` does not work if the card stays on
+        // the reader. We thus retry exactly once here.
+        if let Ok(a) = self.device.reqa().or_else(|_| self.device.reqa()) {
             if let Ok(n_uid) = self.device.select(&a) {
                 let n_id = unpack_uid(n_uid);
-                return match self.last_state {
+                self.prev_state = Some(n_id);
+                return match prev_id {
                     Some(id) if id == n_id => None,
-                    Some(_) | None => {
-                        self.last_state = Some(n_id);
-                        Some(IdReaderEvent::New(n_id))
-                    }
+                    Some(_) | None => Some(IdReaderEvent::New(n_id)),
                 };
             }
-        } else {
-            let _ = write!(p, "nope\r\n");
         }
-        self.last_state = None;
-        match self.last_state {
+        self.prev_state = None;
+        match prev_id {
             Some(_) => Some(IdReaderEvent::Removed),
             None => None,
         }
@@ -167,8 +182,6 @@ fn main() -> ! {
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let mut led_pin = pins.led.into_push_pull_output();
-    let mut pin_state = PinState::Low;
-    led_pin.set_state(pin_state).unwrap();
     loop {
         if !usb_dev.poll(&mut [&mut serial]) {
             continue;
@@ -178,11 +191,21 @@ fn main() -> ! {
             serial: &mut serial,
         };
 
-        if let Some(e) = id_reader.poll_event(&mut out) {
+        use core::fmt::Write;
+        let _ = write!(out, "\r");
+
+        if let Some(e) = id_reader.poll_event() {
             match e {
-                IdReaderEvent::New(_id) => led_pin.set_high().unwrap(),
-                IdReaderEvent::Removed => led_pin.set_low().unwrap(),
+                IdReaderEvent::New(id) => {
+                    let _ = write!(out, "New card: {}\r\n", id);
+                    led_pin.set_high().unwrap();
+                }
+                IdReaderEvent::Removed => {
+                    let _ = write!(out, "Card removed\r\n");
+                    led_pin.set_low().unwrap();
+                }
             }
         }
+        delay.delay_ms(10);
     }
 }
