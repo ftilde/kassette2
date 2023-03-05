@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
+use embedded_hal::blocking::spi;
 use embedded_hal::digital::v2::OutputPin;
-use embedded_hal::digital::v2::PinState;
 use rp_pico::entry;
 
 // Ensure we halt the program on panic (if we don't mention this crate it won't
@@ -17,10 +17,55 @@ use rp_pico::hal::Spi;
 
 use fugit::RateExtU32;
 
-fn toggle(s: PinState) -> PinState {
-    match s {
-        PinState::Low => PinState::High,
-        PinState::High => PinState::Low,
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Id([u8; 4]);
+
+struct IdReader<SPI, NSS> {
+    last_state: Option<Id>,
+    device: mfrc522::Mfrc522<SPI, NSS>,
+}
+
+enum IdReaderEvent {
+    New(Id),
+    Removed,
+}
+
+fn unpack_uid(v: mfrc522::Uid) -> Id {
+    let v: [u8; 4] = v.as_bytes().try_into().unwrap();
+    Id(v)
+}
+
+impl<E, SPI, NSS> IdReader<SPI, NSS>
+where
+    E: core::fmt::Debug,
+    SPI: spi::Transfer<u8, Error = E> + spi::Write<u8, Error = E>,
+    NSS: OutputPin,
+{
+    fn new(spi: SPI, nss: NSS) -> Self {
+        let device = mfrc522::Mfrc522::with_nss(spi, nss).unwrap();
+        Self {
+            device,
+            last_state: None,
+        }
+    }
+    fn poll_event(&mut self) -> Option<IdReaderEvent> {
+        if let Ok(a) = self.device.reqa() {
+            if let Ok(n_uid) = self.device.select(&a) {
+                let n_id = unpack_uid(n_uid);
+                return match self.last_state {
+                    Some(id) if id == n_id => None,
+                    Some(_) | None => {
+                        self.last_state = Some(n_id);
+                        Some(IdReaderEvent::New(n_id))
+                    }
+                };
+            }
+        }
+        self.last_state = None;
+        match self.last_state {
+            Some(_) => Some(IdReaderEvent::Removed),
+            None => None,
+        }
     }
 }
 
@@ -69,20 +114,17 @@ fn main() -> ! {
     let _spi_miso = pins.gpio8.into_mode::<hal::gpio::FunctionSpi>();
     let spi_csn = pins.gpio9.into_push_pull_output();
 
-    let mut mfrc = mfrc522::Mfrc522::with_nss(spi, spi_csn).unwrap();
+    let mut id_reader = IdReader::new(spi, spi_csn);
 
-    // The delay object lets us wait for specified amounts of time (in
-    // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let mut led_pin = pins.led.into_push_pull_output();
-    let mut state = PinState::Low;
-    led_pin.set_state(state).unwrap();
+    led_pin.set_high().unwrap();
     loop {
-        if let Ok(a) = mfrc.reqa() {
-            if let Ok(_uid) = mfrc.select(&a) {
-                led_pin.set_state(state).unwrap();
-                state = toggle(state);
+        if let Some(e) = id_reader.poll_event() {
+            match e {
+                IdReaderEvent::New(_id) => led_pin.set_high().unwrap(),
+                IdReaderEvent::Removed => led_pin.set_low().unwrap(),
             }
         }
         delay.delay_ms(500);
