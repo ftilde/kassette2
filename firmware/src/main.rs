@@ -10,6 +10,7 @@ mod queue;
 mod sdcard;
 
 use acid_io::Read;
+use embedded_hal::digital::v2::OutputPin;
 //use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
 //use defmt::info;
@@ -25,8 +26,13 @@ use panic_halt as _;
 use rp_pico::hal;
 use rp_pico::hal::pac;
 use rp_pico::hal::prelude::*;
+use rp_pico::hal::Spi;
 
 use embedded_alloc::Heap;
+
+use fugit::RateExtU32;
+
+use id_reader::*;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -132,6 +138,21 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
+    // Set up SPI for the id card reader:
+    let _spi_sclk = pins.gpio10.into_mode::<hal::gpio::FunctionSpi>();
+    let _spi_mosi = pins.gpio11.into_mode::<hal::gpio::FunctionSpi>();
+    let _spi_miso = pins.gpio8.into_mode::<hal::gpio::FunctionSpi>();
+    let spi_csn = pins.gpio9.into_push_pull_output();
+
+    let spi: Spi<_, _, 8> = Spi::new(pac.SPI1).init(
+        &mut pac.RESETS,
+        clocks.peripheral_clock.freq(),
+        10.MHz(),
+        &embedded_hal::spi::MODE_0,
+    );
+
+    let mut id_reader = IdReader::new(spi, spi_csn);
+
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
@@ -200,6 +221,17 @@ fn main() -> ! {
             }
 
             buf = frame.into_buffer();
+
+            if let Some(e) = id_reader.poll_event() {
+                match e {
+                    IdReaderEvent::New(_id) => {
+                        led_pin.set_high().unwrap();
+                    }
+                    IdReaderEvent::Removed => {
+                        led_pin.set_low().unwrap();
+                    }
+                }
+            }
 
             //delay.delay_ms(20);
         }

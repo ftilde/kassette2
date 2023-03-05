@@ -30,3 +30,4 @@ claxon = { path = "../../claxon" }
 acid_io = { git = "https://github.com/dataphract/acid_io", default-features=false }
 embedded-alloc = "0.5.0"
 config = { path = "../config" }
+id_reader = { path = "../id_reader" }
