@@ -80,7 +80,7 @@ impl<CS: PinId> SDCardController<'_, CS> {
     }
 }
 
-type SDSpi<CS> = SdMmcSpi<
+pub type SDSpi<CS> = SdMmcSpi<
     hal::Spi<hal::spi::Enabled, pac::SPI0, 8>,
     Pin<CS, hal::gpio::Output<hal::gpio::PushPull>>,
 >;

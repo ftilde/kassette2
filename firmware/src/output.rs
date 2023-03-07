@@ -10,7 +10,7 @@ pub fn setup_output<
     M: hal::gpio::PinMode + hal::gpio::ValidPinMode<P>,
 >(
     pio: pac::PIO0,
-    timer: pac::TIMER,
+    timer: &mut hal::Timer,
     resets: &mut pac::RESETS,
     output_pin: hal::gpio::Pin<P, M>,
     consumer_queue: crate::queue::QueueConsumer,
@@ -41,6 +41,5 @@ pub fn setup_output<
     // Start state machine
     let _sm = sm.start();
 
-    let mut timer = hal::Timer::new(timer, resets);
-    crate::queue::setup_timer_interrupt(&mut timer, consumer_queue, tx);
+    crate::queue::setup_timer_interrupt(timer, consumer_queue, tx);
 }

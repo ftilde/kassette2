@@ -9,7 +9,11 @@ mod output;
 mod queue;
 mod sdcard;
 
+use core::cell::RefCell;
+use core::mem::MaybeUninit;
+
 use acid_io::Read;
+use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use embedded_hal::digital::v2::OutputPin;
 //use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
@@ -30,6 +34,7 @@ use rp_pico::hal::Spi;
 
 use embedded_alloc::Heap;
 
+use fugit::ExtU32;
 use fugit::RateExtU32;
 
 use id_reader::*;
@@ -73,13 +78,32 @@ fn data(freq_hz: u32) -> impl Iterator<Item = u16> {
 }
 
 struct ReadableFile<'a, 'b, CS: hal::gpio::PinId> {
-    fs: &'a mut sdcard::SDCardController<'b, CS>,
-    file: &'a mut embedded_sdmmc::File,
+    fs: &'a RefCell<sdcard::SDCardController<'b, CS>>,
+    file: MaybeUninit<embedded_sdmmc::File>,
 }
 
 impl<'a, 'b, CS: hal::gpio::PinId> Read for ReadableFile<'a, 'b, CS> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, acid_io::Error> {
-        Ok(self.fs.read(&mut self.file, buf))
+        // Safety: It only becomes uninit on drop
+        let file = unsafe { self.file.assume_init_mut() };
+
+        let mut fs = self.fs.borrow_mut();
+        Ok(fs.read(file, buf))
+    }
+}
+impl<'a, 'b, CS: hal::gpio::PinId> Drop for ReadableFile<'a, 'b, CS> {
+    fn drop(&mut self) {
+        let file = core::mem::replace(&mut self.file, MaybeUninit::uninit());
+        let file = unsafe { file.assume_init() };
+        let mut fs = self.fs.borrow_mut();
+        fs.close(file);
+    }
+}
+impl<'a, 'b, CS: hal::gpio::PinId> ReadableFile<'a, 'b, CS> {
+    fn open(fs: &'a RefCell<sdcard::SDCardController<'b, CS>>, name: &str) -> Self {
+        let mut fs_ref = fs.borrow_mut();
+        let file = MaybeUninit::new(fs_ref.open(name, Mode::ReadOnly));
+        ReadableFile { file, fs }
     }
 }
 
@@ -153,15 +177,20 @@ fn main() -> ! {
 
     let mut id_reader = IdReader::new(spi, spi_csn);
 
+    let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
+
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let mut led_pin = pins.led.into_push_pull_output();
 
-    output::setup_output(pac.PIO0, pac.TIMER, &mut pac.RESETS, pins.gpio15, cons);
+    output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio15, cons);
 
-    let mut sd = sdcard::init_sd(
+    let mut card_poll_timer = timer.count_down();
+    card_poll_timer.start(100.millis());
+
+    let mut sd: sdcard::SDSpi<hal::gpio::pin::bank0::Gpio17> = sdcard::init_sd(
         pins.gpio18,
         pins.gpio19,
         pins.gpio16,
@@ -170,38 +199,55 @@ fn main() -> ! {
         &mut pac.RESETS,
         &clocks,
     );
-    let mut fs = sdcard::SDCardController::init(&mut sd);
-
-    let mut f = fs.open("bb.flc", Mode::ReadOnly);
+    let fs = RefCell::new(sdcard::SDCardController::init(&mut sd));
 
     let mut data_fns = [data(100), data(200), data(400), data(800)];
     let mut data_fn_i = 0;
     let mut data = 0;
     let mut i = 0;
 
-    {
-        let file = ReadableFile {
-            fs: &mut fs,
-            file: &mut f,
-        };
-        let Ok(mut file) = claxon::FlacReader::new(file) else {
-            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
-        };
-        let mut blocks = file.blocks();
+    let mut current_track: Option<claxon::FlacReader<ReadableFile<hal::gpio::pin::bank0::Gpio17>>> =
+        None;
 
-        // ----------------------------------------------------------------------------
-        // Main loop! -----------------------------------------------------------------
-        // ----------------------------------------------------------------------------
+    // ----------------------------------------------------------------------------
+    // Main loop! -----------------------------------------------------------------
+    // ----------------------------------------------------------------------------
 
-        let mut buf = alloc::vec::Vec::with_capacity(1024);
-        let sin_test = false;
-        loop {
+    let mut buf = alloc::vec::Vec::with_capacity(1024);
+    let sin_test = false;
+    loop {
+        if current_track.is_none() || card_poll_timer.wait().is_ok() {
+            if let Some(e) = id_reader.poll_event() {
+                match e {
+                    IdReaderEvent::New(_id) => {
+                        led_pin.set_high().unwrap();
+                        let _ = current_track.take();
+
+                        let file = ReadableFile::open(&fs, "bb.flc");
+                        let Ok(file) = claxon::FlacReader::new(file) else {
+                                blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
+                            };
+
+                        current_track = Some(file);
+                    }
+                    IdReaderEvent::Removed => {
+                        led_pin.set_low().unwrap();
+
+                        current_track = None;
+                    }
+                }
+            }
+        }
+
+        if let Some(ref mut file) = current_track {
+            let mut blocks = file.blocks();
             let Ok(frame) = blocks.read_next_or_eof(core::mem::take(&mut buf)) else {
-                blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
-            };
+                    blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
+                };
             let Some(frame) = frame else {
-                break;
-            };
+                    current_track = None;
+                    continue;
+                };
             let channel = frame.channel(0); // We only have mono files here
 
             for v in channel {
@@ -221,31 +267,15 @@ fn main() -> ! {
             }
 
             buf = frame.into_buffer();
-
-            if let Some(e) = id_reader.poll_event() {
-                match e {
-                    IdReaderEvent::New(_id) => {
-                        led_pin.set_high().unwrap();
-                    }
-                    IdReaderEvent::Removed => {
-                        led_pin.set_low().unwrap();
-                    }
+        } else {
+            while prod.push(data).is_ok() {
+                data = data_fns[data_fn_i].next().unwrap();
+                i += 1;
+                if i == 40000 {
+                    i = 0;
+                    data_fn_i = (data_fn_i + 1) % data_fns.len();
                 }
             }
-
-            //delay.delay_ms(20);
         }
-    }
-    fs.close(f);
-    loop {
-        while prod.push(data).is_ok() {
-            data = data_fns[data_fn_i].next().unwrap();
-            i += 1;
-            if i == 40000 {
-                i = 0;
-                data_fn_i = (data_fn_i + 1) % data_fns.len();
-            }
-        }
-        delay.delay_ms(20);
     }
 }
