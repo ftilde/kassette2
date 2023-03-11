@@ -107,6 +107,26 @@ impl<'a, 'b, CS: hal::gpio::PinId> ReadableFile<'a, 'b, CS> {
     }
 }
 
+struct SpeakerControl {
+    pin: hal::gpio::DynPin,
+}
+
+impl SpeakerControl {
+    fn new(pin: impl Into<hal::gpio::DynPin>) -> Self {
+        let mut ret = Self { pin: pin.into() };
+        ret
+    }
+
+    fn off(&mut self) {
+        self.pin.into_push_pull_output();
+        self.pin.set_low().unwrap();
+    }
+
+    fn on(&mut self) {
+        self.pin.into_floating_disabled();
+    }
+}
+
 /// Entry point to our bare-metal application.
 ///
 /// The `#[entry]` macro ensures the Cortex-M start-up code calls this function
@@ -175,6 +195,8 @@ fn main() -> ! {
         &embedded_hal::spi::MODE_0,
     );
 
+    let mut speaker_control = SpeakerControl::new(pins.gpio14);
+
     let mut id_reader = IdReader::new(spi, spi_csn);
 
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
@@ -227,11 +249,14 @@ fn main() -> ! {
                         let Ok(file) = claxon::FlacReader::new(file) else {
                                 blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
                             };
+                        speaker_control.on();
 
                         current_track = Some(file);
                     }
                     IdReaderEvent::Removed => {
                         led_pin.set_low().unwrap();
+
+                        speaker_control.off();
 
                         current_track = None;
                     }
@@ -268,14 +293,14 @@ fn main() -> ! {
 
             buf = frame.into_buffer();
         } else {
-            while prod.push(data).is_ok() {
-                data = data_fns[data_fn_i].next().unwrap();
-                i += 1;
-                if i == 40000 {
-                    i = 0;
-                    data_fn_i = (data_fn_i + 1) % data_fns.len();
-                }
-            }
+            //while prod.push(data).is_ok() {
+            //    data = data_fns[data_fn_i].next().unwrap();
+            //    i += 1;
+            //    if i == 40000 {
+            //        i = 0;
+            //        data_fn_i = (data_fn_i + 1) % data_fns.len();
+            //    }
+            //}
         }
     }
 }
