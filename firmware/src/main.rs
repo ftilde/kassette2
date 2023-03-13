@@ -100,10 +100,10 @@ impl<'a, 'b, CS: hal::gpio::PinId> Drop for ReadableFile<'a, 'b, CS> {
     }
 }
 impl<'a, 'b, CS: hal::gpio::PinId> ReadableFile<'a, 'b, CS> {
-    fn open(fs: &'a RefCell<sdcard::SDCardController<'b, CS>>, name: &str) -> Self {
+    fn open(fs: &'a RefCell<sdcard::SDCardController<'b, CS>>, name: &str) -> Result<Self, ()> {
         let mut fs_ref = fs.borrow_mut();
-        let file = MaybeUninit::new(fs_ref.open(name, Mode::ReadOnly));
-        ReadableFile { file, fs }
+        let file = MaybeUninit::new(fs_ref.open(name, Mode::ReadOnly)?);
+        Ok(ReadableFile { file, fs })
     }
 }
 
@@ -241,14 +241,17 @@ fn main() -> ! {
         if current_track.is_none() || card_poll_timer.wait().is_ok() {
             if let Some(e) = id_reader.poll_event() {
                 match e {
-                    IdReaderEvent::New(_id) => {
+                    IdReaderEvent::New(id) => {
                         led_pin.set_high().unwrap();
                         let _ = current_track.take();
 
-                        let file = ReadableFile::open(&fs, "bb.flc");
+                        let file_name = id.filename_v2();
+                        let Ok(file) = ReadableFile::open(&fs, &file_name) else {
+                            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
+                        };
                         let Ok(file) = claxon::FlacReader::new(file) else {
-                                blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
-                            };
+                            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
+                        };
                         speaker_control.on();
 
                         current_track = Some(file);

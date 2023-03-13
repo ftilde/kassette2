@@ -1,9 +1,12 @@
 #![no_std]
 
+extern crate alloc;
+
+use alloc::string::String;
 use embedded_hal::blocking::spi;
 use embedded_hal::digital::v2::OutputPin;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id(pub [u8; 4]);
 
 fn fmt_nibble(nibble: u8) -> u8 {
@@ -28,6 +31,14 @@ impl core::fmt::Display for Id {
             write!(f, " ")?;
         }
         Ok(())
+    }
+}
+
+impl Id {
+    pub fn filename_v2(&self) -> String {
+        use alloc::format;
+        let id = u32::from_be_bytes(self.0);
+        format!("{:x}.FLC", id)
     }
 }
 

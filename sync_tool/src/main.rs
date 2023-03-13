@@ -1,6 +1,12 @@
+mod media_definition;
+
 use clap::Parser;
 use flac_bound::{FlacEncoder, WriteWrapper};
-use std::{fs::File, io::Write, path::PathBuf};
+use std::{
+    fs::File,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use symphonia::core::{
     audio::Signal,
     codecs::{DecoderOptions, CODEC_TYPE_NULL},
@@ -46,20 +52,20 @@ impl Resampler {
 }
 
 #[derive(Parser, Debug)] // requires `derive` feature
-#[command()] // Just to make testing across clap features easier
+#[command()]
 struct Args {
     #[arg()]
-    file: PathBuf,
+    source: PathBuf,
+
+    #[arg()]
+    destination: PathBuf,
 }
 
-fn main() {
-    // Get the first command line argument.
-    let args = Args::parse();
-
+fn transcode_v2(source: &Path, destination: &Path) {
     // Open the media source.
-    let src = File::open(&args.file).expect("failed to open media");
+    let src = File::open(source).expect("failed to open media");
 
-    let out_file = File::create(args.file.with_extension("flc").file_name().unwrap()).unwrap();
+    let out_file = File::create(destination).unwrap();
     let mut out_file = std::io::BufWriter::new(out_file);
 
     let target_sample_rate = config::SAMPLE_RATE;
@@ -74,7 +80,7 @@ fn main() {
 
         // Create a probe hint using the file's extension. [Optional]
         let mut hint = Hint::new();
-        if let Some(ext) = args.file.extension() {
+        if let Some(ext) = source.extension() {
             hint.with_extension(&ext.to_string_lossy());
         }
 
@@ -187,7 +193,7 @@ fn main() {
                     enc.process(&[resampled.as_slice()]).unwrap();
 
                     //out_file.write_all(out_buf).unwrap();
-                    println!("Written {} samples", out_buf.len());
+                    //println!("Written {} samples", out_buf.len());
                 }
                 Err(Error::IoError(_)) => {
                     // The packet failed to decode due to an IO error, skip the packet.
@@ -207,4 +213,35 @@ fn main() {
     }
 
     out_file.flush().unwrap();
+}
+
+fn sync_v2(source: &Path, destination: &Path) {
+    let md_file = source.join("media_definition.txt");
+    let md = media_definition::load_media_definition(&md_file, source);
+
+    for (id, name) in &md {
+        let dst_file = destination.join(id.filename_v2());
+        if dst_file.exists() {
+            println!(
+                "File {} ({}) exists",
+                dst_file.to_string_lossy(),
+                name.to_string_lossy()
+            );
+        } else {
+            println!(
+                "Transcoding {} ({})",
+                dst_file.to_string_lossy(),
+                name.to_string_lossy()
+            );
+            let src_file = source.join(name);
+            transcode_v2(&src_file, &dst_file);
+        }
+    }
+}
+
+fn main() {
+    // Get the first command line argument.
+    let args = Args::parse();
+
+    sync_v2(&args.source, &args.destination);
 }
