@@ -2,6 +2,7 @@ mod media_definition;
 
 use clap::Parser;
 use flac_bound::{FlacEncoder, WriteWrapper};
+use progressing::Baring;
 use rubato::{InterpolationParameters, InterpolationType, Resampler, SincFixedIn, WindowFunction};
 use std::{
     collections::VecDeque,
@@ -72,6 +73,8 @@ fn transcode_v2(source: &Path, destination: &Path) {
             .expect("no supported audio tracks");
 
         let input_sample_rate = track.codec_params.sample_rate.unwrap();
+        let len = track.codec_params.n_frames;
+        let len_estimated = len.unwrap();
 
         //let target_sample_rate = input_sample_rate;
 
@@ -114,6 +117,7 @@ fn transcode_v2(source: &Path, destination: &Path) {
         let track_id = track.id;
 
         let mut out_buf = VecDeque::with_capacity(2 * frames_per_batch);
+        let mut frame_count = 0;
 
         let mut resample_and_output = |batch: &[f32]| {
             let resampled = resampler.process(&[batch], None).unwrap();
@@ -129,6 +133,9 @@ fn transcode_v2(source: &Path, destination: &Path) {
                 .collect::<Vec<_>>();
             enc.process(&[resampled.as_slice()]).unwrap();
         };
+
+        let mut progress_bar =
+            progressing::mapping::Bar::with_range(0, len_estimated as i64).timed();
 
         // The decode loop.
         loop {
@@ -183,6 +190,11 @@ fn transcode_v2(source: &Path, destination: &Path) {
                     if out_buf.len() > frames_per_batch {
                         let batch = out_buf.drain(..frames_per_batch).collect::<Vec<_>>();
                         resample_and_output(&batch);
+                        frame_count += batch.len();
+                        progress_bar.set(frame_count as i64);
+                        if progress_bar.has_progressed_significantly() {
+                            print!("\r{}", progress_bar);
+                        }
                     }
 
                     //out_file.write_all(out_buf).unwrap();
@@ -213,6 +225,7 @@ fn transcode_v2(source: &Path, destination: &Path) {
     }
 
     out_file.flush().unwrap();
+    println!(" Done");
 }
 
 fn sync_v2(source: &Path, destination: &Path) {
