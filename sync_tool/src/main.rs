@@ -2,7 +2,9 @@ mod media_definition;
 
 use clap::Parser;
 use flac_bound::{FlacEncoder, WriteWrapper};
+use rubato::{InterpolationParameters, InterpolationType, Resampler, SincFixedIn, WindowFunction};
 use std::{
+    collections::VecDeque,
     fs::File,
     io::Write,
     path::{Path, PathBuf},
@@ -16,40 +18,6 @@ use symphonia::core::{
     meta::MetadataOptions,
     probe::Hint,
 };
-
-struct Resampler {
-    source_sample_counter: u64,
-    source_sample_rate: u64,
-    sink_sample_counter: u64,
-    sink_sample_rate: u64,
-}
-
-impl Resampler {
-    fn new(source_sample_rate: u64, sink_sample_rate: u64) -> Self {
-        Resampler {
-            source_sample_counter: 0,
-            source_sample_rate,
-            sink_sample_counter: 0,
-            sink_sample_rate,
-        }
-    }
-
-    fn resample_nearest(&mut self, input: &[i32]) -> Vec<i32> {
-        let mut output = Vec::new();
-        for l in input {
-            self.source_sample_counter += 1;
-
-            let new_sink_sample_counter = self.source_sample_counter * self.sink_sample_rate as u64
-                / self.source_sample_rate as u64;
-
-            for _ in 0..(new_sink_sample_counter - self.sink_sample_counter) {
-                output.push(*l);
-            }
-            self.sink_sample_counter = new_sink_sample_counter;
-        }
-        output
-    }
-}
 
 #[derive(Parser, Debug)] // requires `derive` feature
 #[command()]
@@ -119,7 +87,20 @@ fn transcode_v2(source: &Path, destination: &Path) {
             .init_write(&mut outw)
             .unwrap();
 
-        let mut resampler = Resampler::new(input_sample_rate as _, target_sample_rate as _);
+        //let mut resampler = Resampler::new(input_sample_rate as _, target_sample_rate as _);
+
+        let frames_per_batch = 1024;
+
+        let params = InterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: InterpolationType::Linear,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let factor = target_sample_rate as f64 / input_sample_rate as f64;
+        let mut resampler =
+            SincFixedIn::<f32>::new(factor, 1.0 / factor, params, frames_per_batch, 1).unwrap();
 
         // Use the default options for the decoder.
         let dec_opts: DecoderOptions = Default::default();
@@ -131,6 +112,23 @@ fn transcode_v2(source: &Path, destination: &Path) {
 
         // Store the track identifier, it will be used to filter packets.
         let track_id = track.id;
+
+        let mut out_buf = VecDeque::with_capacity(2 * frames_per_batch);
+
+        let mut resample_and_output = |batch: &[f32]| {
+            let resampled = resampler.process(&[batch], None).unwrap();
+
+            let right_shift_amount = 32 - bits;
+            let left_shift_amount = format_bits - bits;
+            let resampled = resampled[0]
+                .iter()
+                .map(|sample| {
+                    let s = (sample * (1i32 << 31) as f32) as i32;
+                    (s >> right_shift_amount) << left_shift_amount
+                })
+                .collect::<Vec<_>>();
+            enc.process(&[resampled.as_slice()]).unwrap();
+        };
 
         // The decode loop.
         loop {
@@ -164,33 +162,28 @@ fn transcode_v2(source: &Path, destination: &Path) {
             match decoder.decode(&packet) {
                 Ok(decoded) => {
                     let num_channels = decoded.spec().channels.count();
-                    let mut buf = decoded.make_equivalent::<i32>();
+                    let mut buf = decoded.make_equivalent::<f32>();
 
                     decoded.convert(&mut buf);
-                    let mut out_buf = Vec::with_capacity(buf.frames());
                     match num_channels {
                         1 => {
                             for v in buf.chan(0) {
-                                out_buf.push(*v);
+                                out_buf.push_back(*v);
                             }
                         }
                         2 => {
                             let (l, r) = buf.chan_pair_mut(0, 1);
                             for (l, r) in l.iter().zip(r.iter()) {
-                                let sum = *l as i64 + *r as i64;
-                                out_buf.push((sum >> 1) as _);
+                                let sum = l + r;
+                                out_buf.push_back(sum * 0.5);
                             }
                         }
                         o => panic!("Unsupported number of channels: {}", o),
                     }
-                    let mut resampled = resampler.resample_nearest(out_buf.as_slice());
-
-                    let right_shift_amount = 32 - bits;
-                    let left_shift_amount = format_bits - bits;
-                    for sample in &mut resampled {
-                        *sample = (*sample >> right_shift_amount) << left_shift_amount;
+                    if out_buf.len() > frames_per_batch {
+                        let batch = out_buf.drain(..frames_per_batch).collect::<Vec<_>>();
+                        resample_and_output(&batch);
                     }
-                    enc.process(&[resampled.as_slice()]).unwrap();
 
                     //out_file.write_all(out_buf).unwrap();
                     //println!("Written {} samples", out_buf.len());
@@ -209,6 +202,13 @@ fn transcode_v2(source: &Path, destination: &Path) {
                 }
             }
         }
+        let batch = out_buf
+            .drain(..)
+            .chain(std::iter::repeat(0.0))
+            .take(frames_per_batch)
+            .collect::<Vec<_>>();
+        resample_and_output(&batch);
+
         enc.finish().unwrap();
     }
 
