@@ -16,7 +16,7 @@ fn parse_line(l: &str) -> Option<(Id, PathBuf)> {
     let end = l.find(" ")?;
     let uid_str = &l[..end];
     let path_str = l[end..].trim();
-    let id = Id(parse_num(uid_str)?.to_le_bytes());
+    let id = Id(parse_num(uid_str)?.to_be_bytes());
     let path = PathBuf::from(path_str);
     Some((id, path))
 }
