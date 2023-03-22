@@ -140,9 +140,12 @@ impl SpeakerControl {
 /// infinite loop.
 #[entry]
 fn main() -> ! {
+    run()
+}
+
+fn run() -> ! {
     // First thing: Initialize the allocator
     {
-        use core::mem::MaybeUninit;
         static mut HEAP_MEM: [MaybeUninit<u8>; config::HEAP_SIZE] =
             [MaybeUninit::uninit(); config::HEAP_SIZE];
         unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
@@ -226,9 +229,6 @@ fn main() -> ! {
         &clocks,
     );
     let fs = RefCell::new(sdcard::SDCardController::init(&mut sd));
-
-    let _bla = pins.gpio18.into_mode::<hal::gpio::FloatingInput>();
-    let _bla2 = pins.gpio19.into_mode::<hal::gpio::FloatingInput>();
 
     let mut data_fns = [data(100), data(200), data(400), data(800)];
     let mut data_fn_i = 0;
