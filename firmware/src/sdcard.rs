@@ -44,10 +44,13 @@ pub struct SDCardController<'a, CS: PinId> {
 }
 
 impl<CS: PinId> SDCardController<'_, CS> {
-    pub fn open(&mut self, filename: &str, mode: Mode) -> Result<File, ()> {
+    pub fn open(
+        &mut self,
+        filename: &str,
+        mode: Mode,
+    ) -> Result<File, embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
         self.controller
             .open_file_in_dir(&mut self.volume, &self.root_dir, filename, mode)
-            .map_err(|_| ())
     }
 
     pub fn close(&mut self, file: File) {

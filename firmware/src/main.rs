@@ -100,7 +100,10 @@ impl<'a, 'b, CS: hal::gpio::PinId> Drop for ReadableFile<'a, 'b, CS> {
     }
 }
 impl<'a, 'b, CS: hal::gpio::PinId> ReadableFile<'a, 'b, CS> {
-    fn open(fs: &'a RefCell<sdcard::SDCardController<'b, CS>>, name: &str) -> Result<Self, ()> {
+    fn open(
+        fs: &'a RefCell<sdcard::SDCardController<'b, CS>>,
+        name: &str,
+    ) -> Result<Self, embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
         let mut fs_ref = fs.borrow_mut();
         let file = MaybeUninit::new(fs_ref.open(name, Mode::ReadOnly)?);
         Ok(ReadableFile { file, fs })

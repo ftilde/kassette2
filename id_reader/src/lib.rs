@@ -38,7 +38,7 @@ impl Id {
     pub fn filename_v2(&self) -> String {
         use alloc::format;
         let id = u32::from_be_bytes(self.0);
-        format!("{:x}.flc", id)
+        format!("{:X}.FLC", id)
     }
 }
 
