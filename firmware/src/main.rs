@@ -114,6 +114,7 @@ struct SpeakerControl {
 impl SpeakerControl {
     fn new(pin: impl Into<hal::gpio::DynPin>) -> Self {
         let mut ret = Self { pin: pin.into() };
+        ret.off();
         ret
     }
 
@@ -195,7 +196,7 @@ fn main() -> ! {
         &embedded_hal::spi::MODE_0,
     );
 
-    let mut speaker_control = SpeakerControl::new(pins.gpio14);
+    let mut speaker_control = SpeakerControl::new(pins.gpio17);
 
     let mut id_reader = IdReader::new(spi, spi_csn);
 
@@ -207,28 +208,31 @@ fn main() -> ! {
 
     let mut led_pin = pins.led.into_push_pull_output();
 
-    output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio15, cons);
+    output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio16, cons);
 
     let mut card_poll_timer = timer.count_down();
     card_poll_timer.start(100.millis());
 
-    let mut sd: sdcard::SDSpi<hal::gpio::pin::bank0::Gpio17> = sdcard::init_sd(
-        pins.gpio18,
-        pins.gpio19,
-        pins.gpio16,
-        pins.gpio17,
+    let mut sd = sdcard::init_sd(
+        pins.gpio2,
+        pins.gpio3,
+        pins.gpio0,
+        pins.gpio1,
         pac.SPI0,
         &mut pac.RESETS,
         &clocks,
     );
     let fs = RefCell::new(sdcard::SDCardController::init(&mut sd));
 
+    let _bla = pins.gpio18.into_mode::<hal::gpio::FloatingInput>();
+    let _bla2 = pins.gpio19.into_mode::<hal::gpio::FloatingInput>();
+
     let mut data_fns = [data(100), data(200), data(400), data(800)];
     let mut data_fn_i = 0;
-    let mut data = 0;
+    //let mut data = 0;
     let mut i = 0;
 
-    let mut current_track: Option<claxon::FlacReader<ReadableFile<hal::gpio::pin::bank0::Gpio17>>> =
+    let mut current_track: Option<claxon::FlacReader<ReadableFile<hal::gpio::pin::bank0::Gpio1>>> =
         None;
 
     // ----------------------------------------------------------------------------
