@@ -7,6 +7,8 @@ pub const BITS_PER_SAMPLE: u16 = 10; //Also change in pwm.pio
 pub const NUM_PWM_ITER: u16 = 3; //Also change in pwm.pio
 pub const SAMPLE_QUEUE_SIZE_KB: usize = 4;
 pub const HEAP_SIZE_KB: usize = 64;
+pub const FADE_DURATION_MILLIS: u64 = 500;
+pub const IDLE_SLEEP_TIME_SECONDS: u64 = 60 * 10;
 
 // ----------------------------------------------------------------------------
 // Should probably not be changed:

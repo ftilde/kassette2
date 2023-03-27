@@ -17,6 +17,7 @@ use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use embedded_hal::digital::v2::OutputPin;
 //use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
+use fugit::TimerDurationU64;
 //use defmt::info;
 //use defmt_rtt as _;
 // The macro for our start-up function
@@ -38,6 +39,7 @@ use fugit::ExtU32;
 use fugit::RateExtU32;
 
 use id_reader::*;
+use rp_pico::hal::timer::Instant;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -235,8 +237,35 @@ fn run() -> ! {
     //let mut data = 0;
     let mut i = 0;
 
-    let mut current_track: Option<claxon::FlacReader<ReadableFile<hal::gpio::pin::bank0::Gpio1>>> =
-        None;
+    type Reader<'a, 'b> = claxon::FlacReader<ReadableFile<'a, 'b, hal::gpio::pin::bank0::Gpio1>>;
+    enum State<'a, 'b> {
+        Stopping {
+            id: Id,
+            file: Reader<'a, 'b>,
+            done_at: Instant,
+        },
+        Stopped {
+            id: Id,
+            file: Reader<'a, 'b>,
+            since: Instant,
+        },
+        Starting {
+            id: Id,
+            file: Reader<'a, 'b>,
+            since: Instant,
+        },
+        Started {
+            id: Id,
+            file: Reader<'a, 'b>,
+        },
+        Empty {
+            since: Instant,
+        },
+    }
+
+    let mut state: State = State::Empty {
+        since: timer.get_counter(),
+    };
 
     // ----------------------------------------------------------------------------
     // Main loop! -----------------------------------------------------------------
@@ -244,45 +273,134 @@ fn run() -> ! {
 
     let mut buf = alloc::vec::Vec::with_capacity(1024);
     let sin_test = false;
-    loop {
-        if current_track.is_none() || card_poll_timer.wait().is_ok() {
-            if let Some(e) = id_reader.poll_event() {
-                match e {
-                    IdReaderEvent::New(id) => {
-                        led_pin.set_high().unwrap();
-                        let _ = current_track.take();
 
-                        let file_name = id.filename_v2();
-                        let Ok(file) = ReadableFile::open(&fs, &file_name) else {
-                            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
-                        };
-                        let Ok(file) = claxon::FlacReader::new(file) else {
-                            blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
-                        };
+    let idle_sleep_time = TimerDurationU64::secs(config::IDLE_SLEEP_TIME_SECONDS);
+
+    let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
+    loop {
+        if (matches!(state, State::Empty { .. } | State::Stopped { .. })
+            || card_poll_timer.wait().is_ok())
+            && !matches!(state, State::Stopping { .. })
+        {
+            if let Some(e) = id_reader.poll_event() {
+                let now = timer.get_counter();
+                match e {
+                    IdReaderEvent::New(n_id) => {
+                        led_pin.set_high().unwrap();
+
                         speaker_control.on();
 
-                        current_track = Some(file);
+                        state = match state {
+                            State::Starting { id, file, since } if id == n_id => {
+                                State::Starting { id, file, since }
+                            }
+                            State::Started { id, file } if id == n_id => {
+                                State::Started { id, file }
+                            }
+                            State::Stopped { id, file, since: _ } if id == n_id => {
+                                State::Starting {
+                                    id,
+                                    file,
+                                    since: now,
+                                }
+                            }
+                            State::Stopping { id, file, done_at } if id == n_id => {
+                                State::Starting {
+                                    id,
+                                    file,
+                                    since: now - (done_at - now),
+                                }
+                            }
+                            _ => {
+                                // Old file dropped now
+                                let file_name = n_id.filename_v2();
+                                let Ok(file) = ReadableFile::open(&fs, &file_name) else {
+                                    blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
+                                };
+                                let Ok(file) = claxon::FlacReader::new(file) else {
+                                    blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
+                                };
+                                State::Starting {
+                                    id: n_id,
+                                    file,
+                                    since: now,
+                                }
+                            }
+                        };
                     }
                     IdReaderEvent::Removed => {
                         led_pin.set_low().unwrap();
 
-                        speaker_control.off();
-
-                        current_track = None;
+                        use State::*;
+                        state = match state {
+                            Starting { id, file, since } => Stopping {
+                                id,
+                                file,
+                                done_at: now + (now - since),
+                            },
+                            Started { id, file } => Stopping {
+                                id,
+                                file,
+                                done_at: now + fade_duration,
+                            },
+                            o => o,
+                        }
                     }
                 }
             }
         }
 
-        if let Some(ref mut file) = current_track {
+        let now = timer.get_counter();
+        if let State::Stopped { since, .. } | State::Empty { since } = state {
+            if since + idle_sleep_time < now {
+                //TODO actually go to low power mode
+                blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_6_SHORT);
+            }
+        }
+
+        // Update state
+        state = match state {
+            State::Stopping { id, file, done_at } if done_at < now => {
+                speaker_control.off();
+                State::Stopped {
+                    id,
+                    file,
+                    since: now,
+                }
+            }
+            State::Starting { id, file, since } if since + fade_duration < now => {
+                State::Started { id, file }
+            }
+            o => o,
+        };
+
+        let fade_mult_denom = config::FADE_DURATION_MILLIS;
+        let (mut file, fade_mult_num) = match &mut state {
+            State::Stopping { file, done_at, .. } => (
+                Some(file),
+                (*done_at - now).to_millis() * fade_mult_denom / config::FADE_DURATION_MILLIS,
+            ),
+            State::Starting { file, since, .. } => (
+                Some(file),
+                (now - *since).to_millis() * fade_mult_denom / config::FADE_DURATION_MILLIS,
+            ),
+            State::Started { file, .. } => (Some(file), fade_mult_denom),
+            _ => (None, 0),
+        };
+        let fade_mult_num = fade_mult_num as i32;
+        let fade_mult_denom = fade_mult_denom as i32;
+
+        if let Some(ref mut file) = file {
             let mut blocks = file.blocks();
             let Ok(frame) = blocks.read_next_or_eof(core::mem::take(&mut buf)) else {
                     blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
                 };
             let Some(frame) = frame else {
-                    current_track = None;
-                    continue;
+                state = State::Empty {
+                    since: timer.get_counter(),
                 };
+                continue;
+            };
             let channel = frame.channel(0); // We only have mono files here
 
             for v in channel {
@@ -295,8 +413,9 @@ fn run() -> ! {
                     }
                     sample
                 } else {
-                    ((v >> (config::FORMAT_BITS_PER_SAMPLE - config::BITS_PER_SAMPLE))
-                        + config::ZERO_SAMPLE as i32) as u16
+                    let raw = v >> (config::FORMAT_BITS_PER_SAMPLE - config::BITS_PER_SAMPLE);
+                    let scaled = raw * fade_mult_num / fade_mult_denom;
+                    (scaled + config::ZERO_SAMPLE as i32) as u16
                 };
                 while prod.push(sample).is_err() {}
             }
