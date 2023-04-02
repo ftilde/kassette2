@@ -14,7 +14,7 @@ use rp_pico::hal::timer::Alarm0;
 
 pub type SampleQueue = ringbuf::StaticRb<u16, { config::SAMPLE_QUEUE_SIZE }>;
 pub type QueueConsumer = ringbuf::consumer::Consumer<u16, &'static SampleQueue>;
-//type QueueProducer = ringbuf::producer::Producer<[u8; 4], &'static SampleQueue>;
+pub type QueueProducer = ringbuf::producer::Producer<u16, &'static SampleQueue>;
 type PioTx = hal::pio::Tx<(pac::PIO0, SM0)>;
 
 struct TimerIrqData {

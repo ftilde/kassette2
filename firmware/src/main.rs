@@ -18,6 +18,8 @@ use embedded_hal::digital::v2::OutputPin;
 //use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
 use fugit::TimerDurationU64;
+use queue::QueueConsumer;
+use queue::QueueProducer;
 //use defmt::info;
 //use defmt_rtt as _;
 // The macro for our start-up function
@@ -29,6 +31,8 @@ use panic_halt as _;
 
 // Pull in any important traits
 use rp_pico::hal;
+use rp_pico::hal::clocks::ClockSource;
+use rp_pico::hal::clocks::StoppableClock;
 use rp_pico::hal::pac;
 use rp_pico::hal::prelude::*;
 use rp_pico::hal::Spi;
@@ -146,22 +150,87 @@ fn main() -> ! {
 }
 
 fn run() -> ! {
-    // First thing: Initialize the allocator
-    {
-        static mut HEAP_MEM: [MaybeUninit<u8>; config::HEAP_SIZE] =
-            [MaybeUninit::uninit(); config::HEAP_SIZE];
-        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
+    loop {
+        // First thing: Initialize the allocator
+        {
+            static mut HEAP_MEM: [MaybeUninit<u8>; config::HEAP_SIZE] =
+                [MaybeUninit::uninit(); config::HEAP_SIZE];
+            unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
+        }
+
+        let mut rb = queue::SampleQueue::default();
+        let (prod, cons) = rb.split_ref();
+        // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
+        let cons = unsafe { core::mem::transmute(cons) };
+        let prod = unsafe { core::mem::transmute(prod) };
+
+        let core = unsafe { pac::CorePeripherals::steal() };
+        let pac = unsafe { pac::Peripherals::steal() };
+        run_until_poweroff(pac, core, prod, cons);
+
+        dormant_sleep_until_interrupt();
     }
+}
 
-    let mut rb = queue::SampleQueue::default();
-    let (mut prod, cons) = rb.split_ref();
-    // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
-    let cons = unsafe { core::mem::transmute(cons) };
+fn dormant_sleep_until_interrupt() {
+    let mut pac = unsafe { pac::Peripherals::steal() };
 
-    // Grab our singleton objects
-    let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = hal::Sio::new(pac.SIO);
+    let pins = rp_pico::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
 
+    let pac = unsafe { pac::Peripherals::steal() };
+    let core = unsafe { pac::CorePeripherals::steal() };
+
+    // Set up a minimal external clock for dormant mode
+    let xosc = hal::xosc::setup_xosc_blocking(pac.XOSC, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
+    let mut clocks = hal::clocks::ClocksManager::new(pac.CLOCKS);
+    clocks
+        .reference_clock
+        .configure_clock(&xosc, xosc.get_freq())
+        .unwrap();
+    clocks
+        .system_clock
+        .configure_clock(&xosc, xosc.get_freq())
+        .unwrap();
+    clocks.usb_clock.disable();
+    clocks.adc_clock.disable();
+    clocks.gpio_output0_clock.disable();
+    clocks.gpio_output1_clock.disable();
+    clocks.gpio_output2_clock.disable();
+    clocks.gpio_output3_clock.disable();
+    clocks.rtc_clock.disable();
+    clocks.peripheral_clock.disable();
+    const PLL_PWR_BITS: u32 = 0x0000002d;
+    pac.PLL_USB.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
+    pac.PLL_SYS.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
+
+    // Set up wake up interrupt
+    // Note: Clearing is not required since the level interrupts are not latched
+    pac.IO_BANK0.dormant_wake_inte[0].write(|w| w.gpio5_level_low().set_bit());
+
+    // Enter dormant mode (we return from this when the interrupt fires
+    unsafe { xosc.dormant() };
+
+    pins.gpio5.into_floating_disabled();
+
+    let mut led_pin = pins.led.into_push_pull_output();
+
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    blink::blink_signals(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
+}
+
+fn run_until_poweroff(
+    mut pac: pac::Peripherals,
+    core: pac::CorePeripherals,
+    mut prod: QueueProducer,
+    cons: QueueConsumer,
+) {
     // Set up the watchdog driver - needed by the clock setup code
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
 
@@ -344,7 +413,7 @@ fn run() -> ! {
                                 done_at: now + fade_duration,
                             },
                             o => o,
-                        }
+                        };
                     }
                 }
             }
@@ -353,8 +422,7 @@ fn run() -> ! {
         let now = timer.get_counter();
         if let State::Stopped { since, .. } | State::Empty { since } = state {
             if since + idle_sleep_time < now {
-                //TODO actually go to low power mode
-                blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_6_SHORT);
+                break;
             }
         }
 
@@ -432,4 +500,6 @@ fn run() -> ! {
             //}
         }
     }
+
+    // TODO actually power stuff off
 }
