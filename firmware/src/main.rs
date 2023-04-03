@@ -15,10 +15,9 @@ use core::mem::MaybeUninit;
 use acid_io::Read;
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use embedded_hal::digital::v2::OutputPin;
-//use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
 use fugit::TimerDurationU64;
-use queue::QueueConsumer;
+//use queue::QueueConsumer;
 use queue::QueueProducer;
 //use defmt::info;
 //use defmt_rtt as _;
@@ -34,6 +33,8 @@ use rp_pico::hal;
 use rp_pico::hal::clocks::ClockSource;
 use rp_pico::hal::clocks::StoppableClock;
 use rp_pico::hal::pac;
+use rp_pico::hal::pll::common_configs::PLL_SYS_125MHZ;
+use rp_pico::hal::pll::setup_pll_blocking;
 use rp_pico::hal::prelude::*;
 use rp_pico::hal::Spi;
 
@@ -43,6 +44,7 @@ use fugit::ExtU32;
 use fugit::RateExtU32;
 
 use id_reader::*;
+use rp_pico::hal::spi::Enabled;
 use rp_pico::hal::timer::Instant;
 
 #[global_allocator]
@@ -150,94 +152,30 @@ fn main() -> ! {
 }
 
 fn run() -> ! {
-    loop {
-        // First thing: Initialize the allocator
-        {
-            static mut HEAP_MEM: [MaybeUninit<u8>; config::HEAP_SIZE] =
-                [MaybeUninit::uninit(); config::HEAP_SIZE];
-            unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
-        }
-
-        let mut rb = queue::SampleQueue::default();
-        let (prod, cons) = rb.split_ref();
-        // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
-        let cons = unsafe { core::mem::transmute(cons) };
-        let prod = unsafe { core::mem::transmute(prod) };
-
-        let core = unsafe { pac::CorePeripherals::steal() };
-        let pac = unsafe { pac::Peripherals::steal() };
-        run_until_poweroff(pac, core, prod, cons);
-
-        dormant_sleep_until_interrupt();
+    // First thing: Initialize the allocator
+    {
+        static mut HEAP_MEM: [MaybeUninit<u8>; config::HEAP_SIZE] =
+            [MaybeUninit::uninit(); config::HEAP_SIZE];
+        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
     }
-}
 
-fn dormant_sleep_until_interrupt() {
+    let mut rb = queue::SampleQueue::default();
+    let (prod, cons) = rb.split_ref();
+
+    // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
+    let cons = unsafe { core::mem::transmute(cons) };
+    let mut prod = unsafe { core::mem::transmute(prod) };
+
+    let core = unsafe { pac::CorePeripherals::steal() };
     let mut pac = unsafe { pac::Peripherals::steal() };
 
-    // The single-cycle I/O block controls our GPIO pins
-    let sio = hal::Sio::new(pac.SIO);
-    let pins = rp_pico::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
-
-    let pac = unsafe { pac::Peripherals::steal() };
-    let core = unsafe { pac::CorePeripherals::steal() };
-
-    // Set up a minimal external clock for dormant mode
-    let xosc = hal::xosc::setup_xosc_blocking(pac.XOSC, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
-    let mut clocks = hal::clocks::ClocksManager::new(pac.CLOCKS);
-    clocks
-        .reference_clock
-        .configure_clock(&xosc, xosc.get_freq())
-        .unwrap();
-    clocks
-        .system_clock
-        .configure_clock(&xosc, xosc.get_freq())
-        .unwrap();
-    clocks.usb_clock.disable();
-    clocks.adc_clock.disable();
-    clocks.gpio_output0_clock.disable();
-    clocks.gpio_output1_clock.disable();
-    clocks.gpio_output2_clock.disable();
-    clocks.gpio_output3_clock.disable();
-    clocks.rtc_clock.disable();
-    clocks.peripheral_clock.disable();
-    const PLL_PWR_BITS: u32 = 0x0000002d;
-    pac.PLL_USB.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
-    pac.PLL_SYS.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
-
-    // Set up wake up interrupt
-    // Note: Clearing is not required since the level interrupts are not latched
-    pac.IO_BANK0.dormant_wake_inte[0].write(|w| w.gpio5_level_low().set_bit());
-
-    // Enter dormant mode (we return from this when the interrupt fires
-    unsafe { xosc.dormant() };
-
-    pins.gpio5.into_floating_disabled();
-
-    let mut led_pin = pins.led.into_push_pull_output();
-
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-    blink::blink_signals(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
-}
-
-fn run_until_poweroff(
-    mut pac: pac::Peripherals,
-    core: pac::CorePeripherals,
-    mut prod: QueueProducer,
-    cons: QueueConsumer,
-) {
     // Set up the watchdog driver - needed by the clock setup code
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
 
     // Configure the clocks
     //
     // The default is to generate a 125 MHz system clock
-    let clocks = hal::clocks::init_clocks_and_plls(
+    let mut clocks = hal::clocks::init_clocks_and_plls(
         rp_pico::XOSC_CRYSTAL_FREQ,
         pac.XOSC,
         pac.CLOCKS,
@@ -278,17 +216,10 @@ fn run_until_poweroff(
     let mut id_reader = IdReader::new(spi, spi_csn);
 
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
-
-    // The delay object lets us wait for specified amounts of time (in
-    // milliseconds)
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-
-    let mut led_pin = pins.led.into_push_pull_output();
-
     output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio16, cons);
 
-    let mut card_poll_timer = timer.count_down();
-    card_poll_timer.start(100.millis());
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut led_pin = pins.led.into_push_pull_output();
 
     let mut sd = sdcard::init_sd(
         pins.gpio2,
@@ -299,7 +230,113 @@ fn run_until_poweroff(
         &mut pac.RESETS,
         &clocks,
     );
-    let fs = RefCell::new(sdcard::SDCardController::init(&mut sd));
+    loop {
+        run_until_poweroff(
+            &mut prod,
+            &mut sd,
+            &mut timer,
+            &mut led_pin,
+            &mut id_reader,
+            &mut speaker_control,
+            &mut delay,
+        );
+
+        speaker_control.off();
+        dormant_sleep_until_interrupt(&mut clocks);
+    }
+}
+
+fn dormant_sleep_until_interrupt(clocks: &mut hal::clocks::ClocksManager) {
+    let mut pac = unsafe { pac::Peripherals::steal() };
+
+    // Set up a minimal external clock for dormant mode
+    let xosc = hal::xosc::setup_xosc_blocking(pac.XOSC, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
+    clocks
+        .reference_clock
+        .configure_clock(&xosc, xosc.get_freq())
+        .unwrap();
+    clocks
+        .system_clock
+        .configure_clock(&xosc, xosc.get_freq())
+        .unwrap();
+    clocks.usb_clock.disable();
+    clocks.adc_clock.disable();
+    clocks.gpio_output0_clock.disable();
+    clocks.gpio_output1_clock.disable();
+    clocks.gpio_output2_clock.disable();
+    clocks.gpio_output3_clock.disable();
+    clocks.rtc_clock.disable();
+    clocks.peripheral_clock.disable();
+    const PLL_PWR_BITS: u32 = 0x0000002d;
+    pac.PLL_USB.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
+    pac.PLL_SYS.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
+
+    // Set up wake up interrupt
+    // Note: Clearing is not required since the level interrupts are not latched
+    pac.IO_BANK0.dormant_wake_inte[0].write(|w| w.gpio5_level_low().set_bit());
+
+    // Enter dormant mode (we return from this when the interrupt fires
+    let xosc = unsafe { xosc.dormant() };
+
+    let xosc = xosc.free();
+    let xosc = hal::xosc::setup_xosc_blocking(xosc, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
+
+    let pll_sys = setup_pll_blocking(
+        pac.PLL_SYS,
+        xosc.operating_frequency(),
+        PLL_SYS_125MHZ,
+        clocks,
+        &mut pac.RESETS,
+    )
+    .unwrap();
+    let pll_usb = setup_pll_blocking(
+        pac.PLL_USB,
+        xosc.operating_frequency(),
+        hal::pll::common_configs::PLL_USB_48MHZ,
+        clocks,
+        &mut pac.RESETS,
+    )
+    .unwrap();
+
+    clocks.init_default(&xosc, &pll_sys, &pll_usb).unwrap();
+
+    clocks.usb_clock.enable();
+    clocks.adc_clock.enable();
+    clocks.gpio_output0_clock.enable();
+    clocks.gpio_output1_clock.enable();
+    clocks.gpio_output2_clock.enable();
+    clocks.gpio_output3_clock.enable();
+    clocks.rtc_clock.enable();
+    clocks.peripheral_clock.enable();
+
+    //pins.gpio5.into_floating_disabled();
+
+    //    TODO:
+    //        - see if some clocks can be skipped (and maybe disabled altogether)
+    //        - reset clock as was done in blogpost https://ghubcoder.github.io/posts/awaking-the-pico/
+    //        - hope that this fixes the sound glitches
+    //        - turn off reader, sdcard
+}
+
+fn run_until_poweroff(
+    prod: &mut QueueProducer,
+    sd: &mut sdcard::SDSpi<hal::gpio::bank0::Gpio1>,
+    timer: &mut hal::Timer,
+    led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
+    id_reader: &mut IdReader<
+        Spi<Enabled, pac::SPI1, 8>,
+        hal::gpio::Pin<hal::gpio::bank0::Gpio9, hal::gpio::Output<hal::gpio::PushPull>>,
+    >,
+    speaker_control: &mut SpeakerControl,
+    delay: &mut cortex_m::delay::Delay,
+) {
+    // The delay object lets us wait for specified amounts of time (in
+    // milliseconds)
+
+    let mut card_poll_timer = timer.count_down();
+    card_poll_timer.start(100.millis());
+
+    let fs = RefCell::new(sdcard::SDCardController::init(sd));
 
     let mut data_fns = [data(100), data(200), data(400), data(800)];
     let mut data_fn_i = 0;
@@ -384,10 +421,10 @@ fn run_until_poweroff(
                                 // Old file dropped now
                                 let file_name = n_id.filename_v2();
                                 let Ok(file) = ReadableFile::open(&fs, &file_name) else {
-                                    blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
+                                    blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
                                 };
                                 let Ok(file) = claxon::FlacReader::new(file) else {
-                                    blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_2_SHORT);
+                                    blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
                                 };
                                 State::Starting {
                                     id: n_id,
@@ -461,7 +498,7 @@ fn run_until_poweroff(
         if let Some(ref mut file) = file {
             let mut blocks = file.blocks();
             let Ok(frame) = blocks.read_next_or_eof(core::mem::take(&mut buf)) else {
-                    blink::blink_signals_loop(&mut led_pin, &mut delay, &blink::BLINK_ERR_3_SHORT);
+                    blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
                 };
             let Some(frame) = frame else {
                 state = State::Empty {
