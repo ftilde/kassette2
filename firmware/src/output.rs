@@ -5,6 +5,8 @@ use rp_pico::hal::pac;
 // Import pio crates
 use rp_pico::hal::prelude::*;
 
+pub type PioStateMachine = hal::pio::StateMachine<(pac::PIO0, hal::pio::SM0), hal::pio::Stopped>;
+
 pub fn setup_output<
     P: hal::gpio::PinId + hal::gpio::bank0::BankPinId,
     M: hal::gpio::PinMode + hal::gpio::ValidPinMode<P>,
@@ -14,7 +16,7 @@ pub fn setup_output<
     resets: &mut pac::RESETS,
     output_pin: hal::gpio::Pin<P, M>,
     consumer_queue: crate::queue::QueueConsumer,
-) {
+) -> PioStateMachine {
     let (mut pio0, sm0, _, _, _) = pio.split(resets);
 
     // Create a pio program
@@ -38,8 +40,6 @@ pub fn setup_output<
     // Set pio pindir for gpio25
     sm.set_pindirs([(output_pin_id, hal::pio::PinDir::Output)]);
 
-    // Start state machine
-    let _sm = sm.start();
-
     crate::queue::setup_timer_interrupt(timer, consumer_queue, tx);
+    sm
 }

@@ -216,7 +216,7 @@ fn run() -> ! {
     let mut id_reader = IdReader::new(spi, spi_csn);
 
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
-    output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio16, cons);
+    let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio16, cons);
 
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     let mut led_pin = pins.led.into_push_pull_output();
@@ -231,6 +231,7 @@ fn run() -> ! {
         &clocks,
     );
     loop {
+        let sm_s = sm.start();
         run_until_poweroff(
             &mut prod,
             &mut sd,
@@ -240,8 +241,9 @@ fn run() -> ! {
             &mut speaker_control,
             &mut delay,
         );
-
         speaker_control.off();
+        sm = sm_s.stop();
+
         dormant_sleep_until_interrupt(&mut clocks);
     }
 }
