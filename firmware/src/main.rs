@@ -139,19 +139,36 @@ impl SpeakerControl {
     }
 }
 
-struct BorrowedMut<'a, T> {
-    inner: &'a mut T,
-}
+struct BorrowedMut<'a, T>(&'a mut T);
 
 impl<'a, T: OutputPin<Error = core::convert::Infallible>> OutputPin for BorrowedMut<'a, T> {
     type Error = core::convert::Infallible;
 
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.inner.set_low()
+        self.0.set_low()
     }
 
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.inner.set_high()
+        self.0.set_high()
+    }
+}
+
+impl<'a, E, T: embedded_hal::blocking::spi::Transfer<u8, Error = E>>
+    embedded_hal::blocking::spi::Transfer<u8> for BorrowedMut<'a, T>
+{
+    type Error = E;
+
+    fn transfer<'w>(&mut self, words: &'w mut [u8]) -> Result<&'w [u8], Self::Error> {
+        self.0.transfer(words)
+    }
+}
+impl<'a, E, T: embedded_hal::blocking::spi::Write<u8, Error = E>>
+    embedded_hal::blocking::spi::Write<u8> for BorrowedMut<'a, T>
+{
+    type Error = E;
+
+    fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        self.0.write(words)
     }
 }
 
@@ -223,6 +240,13 @@ fn run() -> ! {
     let mut id_reader_reset = pins.gpio7.into_push_pull_output();
     id_reader_reset.set_low().unwrap();
 
+    let mut id_reader_spi: Spi<_, _, 8> = Spi::new(pac.SPI1).init(
+        &mut pac.RESETS,
+        clocks.peripheral_clock.freq(),
+        10.MHz(),
+        &embedded_hal::spi::MODE_0,
+    );
+
     let mut speaker_control = SpeakerControl::new(pins.gpio17);
 
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
@@ -244,18 +268,9 @@ fn run() -> ! {
     loop {
         let sm_s = sm.start();
 
-        let id_reader_spi = unsafe { pac::Peripherals::steal().SPI1 };
-        let spi_csn = BorrowedMut {
-            inner: &mut spi_csn,
-        };
+        let spi_csn = BorrowedMut(&mut spi_csn);
+        let id_reader_spi = BorrowedMut(&mut id_reader_spi);
         id_reader_reset.set_high().unwrap();
-
-        let id_reader_spi: Spi<_, _, 8> = Spi::new(id_reader_spi).init(
-            &mut pac.RESETS,
-            clocks.peripheral_clock.freq(),
-            10.MHz(),
-            &embedded_hal::spi::MODE_0,
-        );
 
         run_until_poweroff(
             &mut prod,
@@ -355,7 +370,7 @@ fn run_until_poweroff(
     timer: &mut hal::Timer,
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
-    id_reader_spi: Spi<hal::spi::Enabled, pac::SPI1, 8>,
+    id_reader_spi: BorrowedMut<Spi<hal::spi::Enabled, pac::SPI1, 8>>,
     id_reader_nss: impl OutputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
     delay: &mut cortex_m::delay::Delay,
