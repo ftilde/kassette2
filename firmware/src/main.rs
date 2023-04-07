@@ -45,7 +45,6 @@ use fugit::ExtU32;
 use fugit::RateExtU32;
 
 use id_reader::*;
-use rp_pico::hal::spi::Enabled;
 use rp_pico::hal::timer::Instant;
 
 #[global_allocator]
@@ -140,6 +139,22 @@ impl SpeakerControl {
     }
 }
 
+struct BorrowedOutputPin<'a> {
+    inner: &'a mut dyn OutputPin<Error = core::convert::Infallible>,
+}
+
+impl<'a> OutputPin for BorrowedOutputPin<'a> {
+    type Error = core::convert::Infallible;
+
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.inner.set_low()
+    }
+
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.inner.set_high()
+    }
+}
+
 /// Entry point to our bare-metal application.
 ///
 /// The `#[entry]` macro ensures the Cortex-M start-up code calls this function
@@ -203,25 +218,18 @@ fn run() -> ! {
     let _spi_sclk = pins.gpio10.into_mode::<hal::gpio::FunctionSpi>();
     let _spi_mosi = pins.gpio11.into_mode::<hal::gpio::FunctionSpi>();
     let _spi_miso = pins.gpio8.into_mode::<hal::gpio::FunctionSpi>();
-    let spi_csn = pins.gpio9.into_push_pull_output();
+    let mut spi_csn = pins.gpio9.into_push_pull_output();
 
-    let spi: Spi<_, _, 8> = Spi::new(pac.SPI1).init(
-        &mut pac.RESETS,
-        clocks.peripheral_clock.freq(),
-        10.MHz(),
-        &embedded_hal::spi::MODE_0,
-    );
+    let mut id_reader_reset = pins.gpio7.into_push_pull_output();
+    id_reader_reset.set_low().unwrap();
 
     let mut speaker_control = SpeakerControl::new(pins.gpio17);
-
-    let mut id_reader = IdReader::new(spi, spi_csn);
 
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
     let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio16, cons);
 
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     let mut led_pin = pins.led.into_push_pull_output();
-
     let mut button_pin = pins.gpio5.into_pull_up_input();
 
     let mut sd = sdcard::init_sd(
@@ -235,16 +243,27 @@ fn run() -> ! {
     );
     loop {
         let sm_s = sm.start();
+
+        let id_reader_spi = unsafe { pac::Peripherals::steal().SPI1 };
+        let spi_csn = BorrowedOutputPin {
+            inner: &mut spi_csn,
+        };
+        id_reader_reset.set_high().unwrap();
+
         run_until_poweroff(
             &mut prod,
             &mut sd,
             &mut timer,
             &mut led_pin,
             &mut button_pin,
-            &mut id_reader,
+            id_reader_spi,
+            spi_csn,
+            &mut pac.RESETS,
             &mut speaker_control,
             &mut delay,
+            &mut clocks,
         );
+        id_reader_reset.set_low().unwrap();
         speaker_control.off();
         sm = sm_s.stop();
 
@@ -331,15 +350,23 @@ fn run_until_poweroff(
     timer: &mut hal::Timer,
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
-    id_reader: &mut IdReader<
-        Spi<Enabled, pac::SPI1, 8>,
-        hal::gpio::Pin<hal::gpio::bank0::Gpio9, hal::gpio::Output<hal::gpio::PushPull>>,
-    >,
+    id_reader_spi: pac::SPI1,
+    id_reader_nss: impl OutputPin<Error = core::convert::Infallible>,
+    resets: &mut pac::RESETS,
     speaker_control: &mut SpeakerControl,
     delay: &mut cortex_m::delay::Delay,
+    clocks: &hal::clocks::ClocksManager,
 ) {
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
+
+    let spi: Spi<_, _, 8> = Spi::new(id_reader_spi).init(
+        resets,
+        clocks.peripheral_clock.freq(),
+        10.MHz(),
+        &embedded_hal::spi::MODE_0,
+    );
+    let mut id_reader = IdReader::new(spi, id_reader_nss);
 
     let mut card_poll_timer = timer.count_down();
     card_poll_timer.start(100.millis());
@@ -474,6 +501,7 @@ fn run_until_poweroff(
         //TODO: Ideally we want an interrupt to handle this because we might miss the low state
         //otherwise
         if button_pin.is_low().unwrap() {
+            while !button_pin.is_high().unwrap() {}
             break;
         }
 
