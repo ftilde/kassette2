@@ -429,9 +429,9 @@ fn run_until_poweroff(
 
     let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
     loop {
-        if (matches!(state, State::Empty { .. } | State::Stopped { .. })
-            || card_poll_timer.wait().is_ok())
-            && !matches!(state, State::Stopping { .. })
+        if !matches!(state, State::Stopping { .. })
+            && (matches!(state, State::Empty { .. } | State::Stopped { .. })
+                || card_poll_timer.wait().is_ok())
         {
             if let Some(e) = id_reader.poll_event() {
                 let now = timer.get_counter();
