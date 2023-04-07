@@ -293,7 +293,7 @@ fn run() -> ! {
 
 fn dormant_sleep_until_interrupt(
     clocks: &mut hal::clocks::ClocksManager,
-    _button_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio5, hal::gpio::Input<hal::gpio::PullUp>>,
+    button_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio5, hal::gpio::Input<hal::gpio::PullUp>>,
 ) {
     let mut pac = unsafe { pac::Peripherals::steal() };
 
@@ -357,11 +357,10 @@ fn dormant_sleep_until_interrupt(
     clocks.rtc_clock.enable();
     clocks.peripheral_clock.enable();
 
-    //    TODO:
-    //        - see if some clocks can be skipped (and maybe disabled altogether)
-    //        - reset clock as was done in blogpost https://ghubcoder.github.io/posts/awaking-the-pico/
-    //        - hope that this fixes the sound glitches
-    //        - turn off reader, sdcard
+    // Wait for button to turn off again
+    while button_pin.is_low().unwrap() {}
+
+    //    TODO: - see if some clocks can be skipped (and maybe disabled altogether)
 }
 
 fn run_until_poweroff(
@@ -512,7 +511,7 @@ fn run_until_poweroff(
         //TODO: Ideally we want an interrupt to handle this because we might miss the low state
         //otherwise
         if button_pin.is_low().unwrap() {
-            while !button_pin.is_high().unwrap() {}
+            while button_pin.is_low().unwrap() {}
             break;
         }
 
