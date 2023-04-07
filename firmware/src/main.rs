@@ -139,11 +139,11 @@ impl SpeakerControl {
     }
 }
 
-struct BorrowedOutputPin<'a> {
-    inner: &'a mut dyn OutputPin<Error = core::convert::Infallible>,
+struct BorrowedMut<'a, T> {
+    inner: &'a mut T,
 }
 
-impl<'a> OutputPin for BorrowedOutputPin<'a> {
+impl<'a, T: OutputPin<Error = core::convert::Infallible>> OutputPin for BorrowedMut<'a, T> {
     type Error = core::convert::Infallible;
 
     fn set_low(&mut self) -> Result<(), Self::Error> {
@@ -245,10 +245,17 @@ fn run() -> ! {
         let sm_s = sm.start();
 
         let id_reader_spi = unsafe { pac::Peripherals::steal().SPI1 };
-        let spi_csn = BorrowedOutputPin {
+        let spi_csn = BorrowedMut {
             inner: &mut spi_csn,
         };
         id_reader_reset.set_high().unwrap();
+
+        let id_reader_spi: Spi<_, _, 8> = Spi::new(id_reader_spi).init(
+            &mut pac.RESETS,
+            clocks.peripheral_clock.freq(),
+            10.MHz(),
+            &embedded_hal::spi::MODE_0,
+        );
 
         run_until_poweroff(
             &mut prod,
@@ -258,10 +265,8 @@ fn run() -> ! {
             &mut button_pin,
             id_reader_spi,
             spi_csn,
-            &mut pac.RESETS,
             &mut speaker_control,
             &mut delay,
-            &mut clocks,
         );
         id_reader_reset.set_low().unwrap();
         speaker_control.off();
@@ -350,23 +355,14 @@ fn run_until_poweroff(
     timer: &mut hal::Timer,
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
-    id_reader_spi: pac::SPI1,
+    id_reader_spi: Spi<hal::spi::Enabled, pac::SPI1, 8>,
     id_reader_nss: impl OutputPin<Error = core::convert::Infallible>,
-    resets: &mut pac::RESETS,
     speaker_control: &mut SpeakerControl,
     delay: &mut cortex_m::delay::Delay,
-    clocks: &hal::clocks::ClocksManager,
 ) {
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
-
-    let spi: Spi<_, _, 8> = Spi::new(id_reader_spi).init(
-        resets,
-        clocks.peripheral_clock.freq(),
-        10.MHz(),
-        &embedded_hal::spi::MODE_0,
-    );
-    let mut id_reader = IdReader::new(spi, id_reader_nss);
+    let mut id_reader = IdReader::new(id_reader_spi, id_reader_nss);
 
     let mut card_poll_timer = timer.count_down();
     card_poll_timer.start(100.millis());
