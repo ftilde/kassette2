@@ -14,6 +14,7 @@ use core::mem::MaybeUninit;
 
 use acid_io::Read;
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
+use embedded_hal::digital::v2::InputPin;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
 use fugit::TimerDurationU64;
@@ -221,6 +222,8 @@ fn run() -> ! {
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     let mut led_pin = pins.led.into_push_pull_output();
 
+    let mut button_pin = pins.gpio5.into_pull_up_input();
+
     let mut sd = sdcard::init_sd(
         pins.gpio2,
         pins.gpio3,
@@ -237,6 +240,7 @@ fn run() -> ! {
             &mut sd,
             &mut timer,
             &mut led_pin,
+            &mut button_pin,
             &mut id_reader,
             &mut speaker_control,
             &mut delay,
@@ -244,11 +248,14 @@ fn run() -> ! {
         speaker_control.off();
         sm = sm_s.stop();
 
-        dormant_sleep_until_interrupt(&mut clocks);
+        dormant_sleep_until_interrupt(&mut clocks, &mut button_pin);
     }
 }
 
-fn dormant_sleep_until_interrupt(clocks: &mut hal::clocks::ClocksManager) {
+fn dormant_sleep_until_interrupt(
+    clocks: &mut hal::clocks::ClocksManager,
+    _button_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio5, hal::gpio::Input<hal::gpio::PullUp>>,
+) {
     let mut pac = unsafe { pac::Peripherals::steal() };
 
     // Set up a minimal external clock for dormant mode
@@ -311,8 +318,6 @@ fn dormant_sleep_until_interrupt(clocks: &mut hal::clocks::ClocksManager) {
     clocks.rtc_clock.enable();
     clocks.peripheral_clock.enable();
 
-    //pins.gpio5.into_floating_disabled();
-
     //    TODO:
     //        - see if some clocks can be skipped (and maybe disabled altogether)
     //        - reset clock as was done in blogpost https://ghubcoder.github.io/posts/awaking-the-pico/
@@ -325,6 +330,7 @@ fn run_until_poweroff(
     sd: &mut sdcard::SDSpi<hal::gpio::bank0::Gpio1>,
     timer: &mut hal::Timer,
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
+    button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
     id_reader: &mut IdReader<
         Spi<Enabled, pac::SPI1, 8>,
         hal::gpio::Pin<hal::gpio::bank0::Gpio9, hal::gpio::Output<hal::gpio::PushPull>>,
@@ -465,6 +471,12 @@ fn run_until_poweroff(
             }
         }
 
+        //TODO: Ideally we want an interrupt to handle this because we might miss the low state
+        //otherwise
+        if button_pin.is_low().unwrap() {
+            break;
+        }
+
         // Update state
         state = match state {
             State::Stopping { id, file, done_at } if done_at < now => {
@@ -539,6 +551,7 @@ fn run_until_poweroff(
             //}
         }
     }
+    led_pin.set_low().unwrap();
 
     // TODO actually power stuff off
 }
