@@ -6,6 +6,7 @@ extern crate alloc;
 #[allow(unused)]
 mod blink;
 mod output;
+mod panic;
 mod queue;
 mod sdcard;
 
@@ -24,10 +25,6 @@ use queue::QueueProducer;
 //use defmt_rtt as _;
 // The macro for our start-up function
 use rp_pico::entry;
-
-// Ensure we halt the program on panic (if we don't mention this crate it won't
-// be linked)
-use panic_halt as _;
 
 // Pull in any important traits
 use rp_pico::hal;
@@ -85,12 +82,12 @@ fn data(freq_hz: u32) -> impl Iterator<Item = u16> {
     })
 }
 
-struct ReadableFile<'a, 'b, CS: hal::gpio::PinId> {
+struct SDCardFile<'a, 'b, CS: hal::gpio::PinId> {
     fs: &'a RefCell<sdcard::SDCardController<'b, CS>>,
     file: MaybeUninit<embedded_sdmmc::File>,
 }
 
-impl<'a, 'b, CS: hal::gpio::PinId> Read for ReadableFile<'a, 'b, CS> {
+impl<'a, 'b, CS: hal::gpio::PinId> Read for SDCardFile<'a, 'b, CS> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, acid_io::Error> {
         // Safety: It only becomes uninit on drop
         let file = unsafe { self.file.assume_init_mut() };
@@ -99,7 +96,25 @@ impl<'a, 'b, CS: hal::gpio::PinId> Read for ReadableFile<'a, 'b, CS> {
         Ok(fs.read(file, buf))
     }
 }
-impl<'a, 'b, CS: hal::gpio::PinId> Drop for ReadableFile<'a, 'b, CS> {
+
+impl<'a, 'b, CS: hal::gpio::PinId> core::fmt::Write for SDCardFile<'a, 'b, CS> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        // Safety: It only becomes uninit on drop
+        let file = unsafe { self.file.assume_init_mut() };
+
+        let mut fs = self.fs.borrow_mut();
+        let mut s = s.as_bytes();
+        loop {
+            let written = fs.write(file, s);
+            s = &s[written..];
+            if s.is_empty() {
+                return Ok(());
+            }
+        }
+    }
+}
+
+impl<'a, 'b, CS: hal::gpio::PinId> Drop for SDCardFile<'a, 'b, CS> {
     fn drop(&mut self) {
         let file = core::mem::replace(&mut self.file, MaybeUninit::uninit());
         let file = unsafe { file.assume_init() };
@@ -107,14 +122,15 @@ impl<'a, 'b, CS: hal::gpio::PinId> Drop for ReadableFile<'a, 'b, CS> {
         fs.close(file);
     }
 }
-impl<'a, 'b, CS: hal::gpio::PinId> ReadableFile<'a, 'b, CS> {
+impl<'a, 'b, CS: hal::gpio::PinId> SDCardFile<'a, 'b, CS> {
     fn open(
         fs: &'a RefCell<sdcard::SDCardController<'b, CS>>,
         name: &str,
+        mode: Mode,
     ) -> Result<Self, embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
         let mut fs_ref = fs.borrow_mut();
-        let file = MaybeUninit::new(fs_ref.open(name, Mode::ReadOnly)?);
-        Ok(ReadableFile { file, fs })
+        let file = MaybeUninit::new(fs_ref.open(name, mode)?);
+        Ok(SDCardFile { file, fs })
     }
 }
 
@@ -388,7 +404,7 @@ fn run_until_poweroff(
     //let mut data = 0;
     let mut i = 0;
 
-    type Reader<'a, 'b> = claxon::FlacReader<ReadableFile<'a, 'b, hal::gpio::pin::bank0::Gpio1>>;
+    type Reader<'a, 'b> = claxon::FlacReader<SDCardFile<'a, 'b, hal::gpio::pin::bank0::Gpio1>>;
     enum State<'a, 'b> {
         Stopping {
             id: Id,
@@ -465,7 +481,7 @@ fn run_until_poweroff(
                             _ => {
                                 // Old file dropped now
                                 let file_name = n_id.filename_v2();
-                                let Ok(file) = ReadableFile::open(&fs, &file_name) else {
+                                let Ok(file) = SDCardFile::open(&fs, &file_name, Mode::ReadOnly) else {
                                     blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
                                 };
                                 let Ok(file) = claxon::FlacReader::new(file) else {

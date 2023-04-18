@@ -15,8 +15,6 @@ embedded-hal = "0.2.7"
 nb = "1.0.0"
 cortex-m = "0.7.6"
 cortex-m-rt = "0.7.3"
-# Panic behaviour, see https://crates.io/keywords/panic-impl for alternatives
-panic-halt = "0.2.0"
 rp-pico = "0.6"
 pio = "0.2.1"
 pio-proc = "0.2.1"

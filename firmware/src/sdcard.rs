@@ -61,6 +61,10 @@ impl<CS: PinId> SDCardController<'_, CS> {
         self.controller.read(&self.volume, file, buf).unwrap()
     }
 
+    pub fn write(&mut self, file: &mut File, buf: &[u8]) -> usize {
+        self.controller.write(&mut self.volume, file, buf).unwrap()
+    }
+
     pub fn init(sdspi: &mut SDSpi<CS>) -> SDCardController<CS> {
         // Next we need to aquire the block device and initialize the
         // communication with the SD card.
