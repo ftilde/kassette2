@@ -5,7 +5,10 @@ use rp_pico::{
     pac,
 };
 
-use crate::{blink, sdcard, SDCardFile};
+use crate::{
+    blink,
+    sdcard::{self, SDCardFile},
+};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {

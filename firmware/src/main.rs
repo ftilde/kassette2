@@ -13,7 +13,6 @@ mod sdcard;
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
 
-use acid_io::Read;
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use embedded_hal::digital::v2::InputPin;
 use embedded_hal::digital::v2::OutputPin;
@@ -43,6 +42,8 @@ use fugit::RateExtU32;
 
 use id_reader::*;
 use rp_pico::hal::timer::Instant;
+
+use crate::sdcard::SDCardFile;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -80,58 +81,6 @@ fn data(freq_hz: u32) -> impl Iterator<Item = u16> {
         i += 1;
         Some(val as u16)
     })
-}
-
-struct SDCardFile<'a, 'b, CS: hal::gpio::PinId> {
-    fs: &'a RefCell<sdcard::SDCardController<'b, CS>>,
-    file: MaybeUninit<embedded_sdmmc::File>,
-}
-
-impl<'a, 'b, CS: hal::gpio::PinId> Read for SDCardFile<'a, 'b, CS> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, acid_io::Error> {
-        // Safety: It only becomes uninit on drop
-        let file = unsafe { self.file.assume_init_mut() };
-
-        let mut fs = self.fs.borrow_mut();
-        Ok(fs.read(file, buf))
-    }
-}
-
-impl<'a, 'b, CS: hal::gpio::PinId> core::fmt::Write for SDCardFile<'a, 'b, CS> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        // Safety: It only becomes uninit on drop
-        let file = unsafe { self.file.assume_init_mut() };
-
-        let mut fs = self.fs.borrow_mut();
-        let mut s = s.as_bytes();
-        loop {
-            let written = fs.write(file, s);
-            s = &s[written..];
-            if s.is_empty() {
-                return Ok(());
-            }
-        }
-    }
-}
-
-impl<'a, 'b, CS: hal::gpio::PinId> Drop for SDCardFile<'a, 'b, CS> {
-    fn drop(&mut self) {
-        let file = core::mem::replace(&mut self.file, MaybeUninit::uninit());
-        let file = unsafe { file.assume_init() };
-        let mut fs = self.fs.borrow_mut();
-        fs.close(file);
-    }
-}
-impl<'a, 'b, CS: hal::gpio::PinId> SDCardFile<'a, 'b, CS> {
-    fn open(
-        fs: &'a RefCell<sdcard::SDCardController<'b, CS>>,
-        name: &str,
-        mode: Mode,
-    ) -> Result<Self, embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
-        let mut fs_ref = fs.borrow_mut();
-        let file = MaybeUninit::new(fs_ref.open(name, mode)?);
-        Ok(SDCardFile { file, fs })
-    }
 }
 
 struct SpeakerControl {
