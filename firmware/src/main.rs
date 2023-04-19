@@ -328,6 +328,54 @@ fn dormant_sleep_until_interrupt(
     //    TODO: - see if some clocks can be skipped (and maybe disabled altogether)
 }
 
+type Reader<'a, 'b> = claxon::FlacReader<SDCardFile<'a, 'b, hal::gpio::pin::bank0::Gpio1>>;
+enum State<'a, 'b> {
+    Stopping {
+        id: Id,
+        file: Reader<'a, 'b>,
+        done_at: Instant,
+    },
+    Stopped {
+        id: Id,
+        file: Reader<'a, 'b>,
+        since: Instant,
+    },
+    Starting {
+        id: Id,
+        file: Reader<'a, 'b>,
+        since: Instant,
+    },
+    Started {
+        id: Id,
+        file: Reader<'a, 'b>,
+    },
+    Empty {
+        since: Instant,
+    },
+}
+
+impl State<'_, '_> {
+    fn stop(&mut self, timer: &hal::Timer) {
+        use State::*;
+        let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
+        let now = timer.get_counter();
+        let s = core::mem::replace(self, Empty { since: now });
+        *self = match s {
+            Starting { id, file, since } => Stopping {
+                id,
+                file,
+                done_at: now + (now - since),
+            },
+            Started { id, file } => Stopping {
+                id,
+                file,
+                done_at: now + fade_duration,
+            },
+            o => o,
+        };
+    }
+}
+
 fn run_until_poweroff(
     prod: &mut QueueProducer,
     sd: &mut sdcard::SDSpi<hal::gpio::bank0::Gpio1>,
@@ -353,32 +401,6 @@ fn run_until_poweroff(
     //let mut data = 0;
     let mut i = 0;
 
-    type Reader<'a, 'b> = claxon::FlacReader<SDCardFile<'a, 'b, hal::gpio::pin::bank0::Gpio1>>;
-    enum State<'a, 'b> {
-        Stopping {
-            id: Id,
-            file: Reader<'a, 'b>,
-            done_at: Instant,
-        },
-        Stopped {
-            id: Id,
-            file: Reader<'a, 'b>,
-            since: Instant,
-        },
-        Starting {
-            id: Id,
-            file: Reader<'a, 'b>,
-            since: Instant,
-        },
-        Started {
-            id: Id,
-            file: Reader<'a, 'b>,
-        },
-        Empty {
-            since: Instant,
-        },
-    }
-
     let mut state: State = State::Empty {
         since: timer.get_counter(),
     };
@@ -389,6 +411,7 @@ fn run_until_poweroff(
 
     let mut buf = alloc::vec::Vec::with_capacity(1024);
     let sin_test = false;
+    let mut turn_off_pressed = false;
 
     let idle_sleep_time = TimerDurationU64::secs(config::IDLE_SLEEP_TIME_SECONDS);
 
@@ -447,23 +470,17 @@ fn run_until_poweroff(
                     IdReaderEvent::Removed => {
                         led_pin.set_low().unwrap();
 
-                        use State::*;
-                        state = match state {
-                            Starting { id, file, since } => Stopping {
-                                id,
-                                file,
-                                done_at: now + (now - since),
-                            },
-                            Started { id, file } => Stopping {
-                                id,
-                                file,
-                                done_at: now + fade_duration,
-                            },
-                            o => o,
-                        };
+                        state.stop(timer);
                     }
                 }
             }
+        }
+
+        //TODO: Ideally we want an interrupt to handle this because we might miss the low state
+        //otherwise
+        if button_pin.is_low().unwrap() {
+            state.stop(timer);
+            turn_off_pressed = true;
         }
 
         let now = timer.get_counter();
@@ -473,17 +490,13 @@ fn run_until_poweroff(
             }
         }
 
-        //TODO: Ideally we want an interrupt to handle this because we might miss the low state
-        //otherwise
-        if button_pin.is_low().unwrap() {
-            while button_pin.is_low().unwrap() {}
-            break;
-        }
-
         // Update state
         state = match state {
             State::Stopping { id, file, done_at } if done_at < now => {
                 speaker_control.off();
+                if turn_off_pressed {
+                    break;
+                }
                 State::Stopped {
                     id,
                     file,
