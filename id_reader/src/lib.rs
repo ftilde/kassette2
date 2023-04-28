@@ -1,8 +1,5 @@
 #![no_std]
 
-extern crate alloc;
-
-use alloc::string::String;
 use embedded_hal::blocking::spi;
 use embedded_hal::digital::v2::OutputPin;
 
@@ -34,11 +31,33 @@ impl core::fmt::Display for Id {
     }
 }
 
+pub struct FileNameStr {
+    buf: [u8; 12],
+}
+
+impl core::ops::Deref for FileNameStr {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::str::from_utf8_unchecked(&self.buf) }
+    }
+}
+
 impl Id {
-    pub fn filename_v2(&self) -> String {
-        use alloc::format;
-        let id = u32::from_be_bytes(self.0);
-        format!("{:X}.FLC", id)
+    pub fn filename_v2(&self) -> FileNameStr {
+        let mut buf = [0u8; 12];
+        let mut i = 0;
+        for b in &self.0 {
+            let nibbles = fmt_byte_to_nibbles(*b);
+            buf[i] = nibbles[0];
+            buf[i + 1] = nibbles[1];
+            i += 2;
+        }
+        for b in b".FLC" {
+            buf[i] = *b;
+            i += 1;
+        }
+        FileNameStr { buf }
     }
 }
 
