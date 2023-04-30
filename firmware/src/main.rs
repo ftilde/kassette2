@@ -12,8 +12,8 @@ mod sdcard;
 
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
+use core::sync::atomic::AtomicU8;
 
-use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use embedded_hal::digital::v2::InputPin;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
@@ -29,6 +29,7 @@ use rp_pico::entry;
 use rp_pico::hal;
 use rp_pico::hal::clocks::ClockSource;
 use rp_pico::hal::clocks::StoppableClock;
+use rp_pico::hal::multicore::Multicore;
 use rp_pico::hal::pac;
 use rp_pico::hal::pll::common_configs::PLL_SYS_125MHZ;
 use rp_pico::hal::pll::setup_pll_blocking;
@@ -37,7 +38,6 @@ use rp_pico::hal::Spi;
 
 use embedded_alloc::Heap;
 
-use fugit::ExtU32;
 use fugit::RateExtU32;
 
 use id_reader::*;
@@ -149,6 +149,67 @@ fn main() -> ! {
     run()
 }
 
+#[repr(u8)]
+#[derive(Copy, Clone)]
+enum Core1State {
+    Running,
+    Stopped,
+}
+
+static CORE1_STATE_REQUEST: AtomicU8 = AtomicU8::new(Core1State::Running as _);
+static CORE1_STATE_CURRENT: AtomicU8 = AtomicU8::new(Core1State::Running as _);
+
+fn transition_core1_blocking(to: Core1State) {
+    use core::sync::atomic::Ordering;
+    CORE1_STATE_REQUEST.store(to as _, Ordering::Release);
+    while CORE1_STATE_CURRENT.load(Ordering::Acquire) != to as _ {}
+}
+
+pub type CardEventQueue = ringbuf::StaticRb<IdReaderEvent, 4>;
+pub type CardEventConsumer = ringbuf::consumer::Consumer<IdReaderEvent, &'static CardEventQueue>;
+pub type CardEventProducer = ringbuf::producer::Producer<IdReaderEvent, &'static CardEventQueue>;
+
+fn core1_task(
+    mut producer: CardEventProducer,
+    mut id_reader_spi: Spi<hal::spi::Enabled, pac::SPI1, 8>,
+    mut spi_csn: impl OutputPin<Error = core::convert::Infallible>,
+    mut id_reader_reset: hal::gpio::Pin<
+        hal::gpio::bank0::Gpio7,
+        hal::gpio::Output<hal::gpio::PushPull>,
+    >,
+) -> ! {
+    let delay_cycles = 12500000; //100Ms with default clock rate
+
+    loop {
+        id_reader_reset.set_high().unwrap();
+        let spi_csn = BorrowedMut(&mut spi_csn);
+        let id_reader_spi = BorrowedMut(&mut id_reader_spi);
+        let mut id_reader = IdReader::new(id_reader_spi, spi_csn);
+
+        loop {
+            if let Some(e) = id_reader.poll_event() {
+                while producer.push(e).is_err() {}
+            }
+
+            if CORE1_STATE_REQUEST.load(Ordering::Acquire) == Core1State::Stopped as _ {
+                // Go to sleep mode
+                break;
+            }
+            cortex_m::asm::delay(delay_cycles);
+        }
+        // Disable card reader to save power
+        id_reader_reset.set_low().unwrap();
+
+        use core::sync::atomic::Ordering;
+        CORE1_STATE_CURRENT.store(Core1State::Stopped as _, Ordering::Release);
+        // Core 0 will transition to dormant mode now
+        while CORE1_STATE_REQUEST.load(Ordering::Acquire) == Core1State::Stopped as _ {}
+        CORE1_STATE_CURRENT.store(Core1State::Running as _, Ordering::Release);
+    }
+}
+
+static mut CORE1_STACK: hal::multicore::Stack<4096> = hal::multicore::Stack::new();
+
 fn run() -> ! {
     // First thing: Initialize the allocator
     {
@@ -160,9 +221,19 @@ fn run() -> ! {
     let mut rb = queue::SampleQueue::default();
     let (prod, cons) = rb.split_ref();
 
+    let mut event_q = CardEventQueue::default();
+    let (event_prod, event_cons) = event_q.split_ref();
+
     // Safety: Transmute to 'static lifetime. This is fine since main actually never returns.
-    let cons = unsafe { core::mem::transmute(cons) };
-    let mut prod = unsafe { core::mem::transmute(prod) };
+    let (cons, mut prod, mut event_cons, event_prod) = unsafe {
+        use core::mem::transmute;
+        (
+            transmute(cons),
+            transmute(prod),
+            transmute(event_prod),
+            transmute(event_cons),
+        )
+    };
 
     let core = unsafe { pac::CorePeripherals::steal() };
     let mut pac = unsafe { pac::Peripherals::steal() };
@@ -186,7 +257,11 @@ fn run() -> ! {
     .unwrap();
 
     // The single-cycle I/O block controls our GPIO pins
-    let sio = hal::Sio::new(pac.SIO);
+    let mut sio = hal::Sio::new(pac.SIO);
+
+    let mut mc = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
+    let cores = mc.cores();
+    let core1 = &mut cores[1];
 
     // Set the pins up according to their function on this particular board
     let pins = rp_pico::Pins::new(
@@ -200,12 +275,11 @@ fn run() -> ! {
     let _spi_sclk = pins.gpio10.into_mode::<hal::gpio::FunctionSpi>();
     let _spi_mosi = pins.gpio11.into_mode::<hal::gpio::FunctionSpi>();
     let _spi_miso = pins.gpio8.into_mode::<hal::gpio::FunctionSpi>();
-    let mut spi_csn = pins.gpio9.into_push_pull_output();
+    let spi_csn = pins.gpio9.into_push_pull_output();
 
-    let mut id_reader_reset = pins.gpio7.into_push_pull_output();
-    id_reader_reset.set_low().unwrap();
+    let id_reader_reset = pins.gpio7.into_push_pull_output();
 
-    let mut id_reader_spi: Spi<_, _, 8> = Spi::new(pac.SPI1).init(
+    let id_reader_spi: Spi<_, _, 8> = Spi::new(pac.SPI1).init(
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
         10.MHz(),
@@ -221,6 +295,10 @@ fn run() -> ! {
     let mut led_pin = pins.led.into_push_pull_output();
     let mut button_pin = pins.gpio5.into_pull_up_input();
 
+    let _test = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
+        core1_task(event_prod, id_reader_spi, spi_csn, id_reader_reset)
+    });
+
     let mut sd = sdcard::init_sd(
         pins.gpio2,
         pins.gpio3,
@@ -233,26 +311,25 @@ fn run() -> ! {
     loop {
         let sm_s = sm.start();
 
-        let spi_csn = BorrowedMut(&mut spi_csn);
-        let id_reader_spi = BorrowedMut(&mut id_reader_spi);
-        id_reader_reset.set_high().unwrap();
-
         run_until_poweroff(
             &mut prod,
+            &mut event_cons,
             &mut sd,
             &mut timer,
             &mut led_pin,
             &mut button_pin,
-            id_reader_spi,
-            spi_csn,
             &mut speaker_control,
             &mut delay,
         );
-        id_reader_reset.set_low().unwrap();
         speaker_control.off();
         sm = sm_s.stop();
 
+        transition_core1_blocking(Core1State::Stopped);
+        // Drain queue of potential old events after core 1 has stopped.
+        while event_cons.pop().is_some() {}
+
         dormant_sleep_until_interrupt(&mut clocks, &mut button_pin);
+        transition_core1_blocking(Core1State::Running);
     }
 }
 
@@ -378,22 +455,14 @@ impl State<'_, '_> {
 
 fn run_until_poweroff(
     prod: &mut QueueProducer,
+    event_consumer: &mut CardEventConsumer,
     sd: &mut sdcard::SDSpi<hal::gpio::bank0::Gpio1>,
     timer: &mut hal::Timer,
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
-    id_reader_spi: BorrowedMut<Spi<hal::spi::Enabled, pac::SPI1, 8>>,
-    id_reader_nss: impl OutputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
     delay: &mut cortex_m::delay::Delay,
 ) {
-    // The delay object lets us wait for specified amounts of time (in
-    // milliseconds)
-    let mut id_reader = IdReader::new(id_reader_spi, id_reader_nss);
-
-    let mut card_poll_timer = timer.count_down();
-    card_poll_timer.start(100.millis());
-
     let fs = RefCell::new(sdcard::SDCardController::init(sd));
 
     let mut data_fns = [data(100), data(200), data(400), data(800)];
@@ -417,61 +486,53 @@ fn run_until_poweroff(
 
     let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
     loop {
-        if !matches!(state, State::Stopping { .. })
-            && (matches!(state, State::Empty { .. } | State::Stopped { .. })
-                || card_poll_timer.wait().is_ok())
-        {
-            if let Some(e) = id_reader.poll_event() {
-                let now = timer.get_counter();
-                match e {
-                    IdReaderEvent::New(n_id) => {
-                        led_pin.set_high().unwrap();
+        if let Some(e) = event_consumer.pop() {
+            let now = timer.get_counter();
+            match e {
+                IdReaderEvent::New(n_id) => {
+                    led_pin.set_high().unwrap();
 
-                        speaker_control.on();
+                    speaker_control.on();
 
-                        state = match state {
-                            State::Starting { id, file, since } if id == n_id => {
-                                State::Starting { id, file, since }
-                            }
-                            State::Started { id, file } if id == n_id => {
-                                State::Started { id, file }
-                            }
-                            State::Stopped { id, file, since: _ } if id == n_id => {
-                                State::Starting {
-                                    id,
-                                    file,
-                                    since: now,
-                                }
-                            }
-                            State::Stopping { id, file, done_at } if id == n_id => {
-                                State::Starting {
-                                    id,
-                                    file,
-                                    since: now - (done_at - now),
-                                }
-                            }
-                            _ => {
-                                // Old file dropped now
-                                let file_name = n_id.filename_v2();
-                                let Ok(file) = SDCardFile::open(&fs, &file_name, Mode::ReadOnly) else {
+                    state = match state {
+                        State::Starting { id, file, since } if id == n_id => {
+                            State::Starting { id, file, since }
+                        }
+                        State::Started { id, file } if id == n_id => State::Started { id, file },
+                        State::Stopped { id, file, since: _ } if id == n_id => State::Starting {
+                            id,
+                            file,
+                            since: now,
+                        },
+                        State::Stopping { id, file, done_at } if id == n_id => State::Starting {
+                            id,
+                            file,
+                            since: now
+                                - (done_at
+                                    .checked_duration_since(now)
+                                    .unwrap_or(TimerDurationU64::from_ticks(0))),
+                        },
+                        _ => {
+                            // Old file dropped now
+                            let file_name = n_id.filename_v2();
+                            let Ok(file) = SDCardFile::open(&fs, &file_name, Mode::ReadOnly) else {
                                     blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
                                 };
-                                let Ok(file) = claxon::FlacReader::new(file) else {
+                            let Ok(file) = claxon::FlacReader::new(file) else {
                                     blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
                                 };
-                                State::Starting {
-                                    id: n_id,
-                                    file,
-                                    since: now,
-                                }
+                            State::Starting {
+                                id: n_id,
+                                file,
+                                since: now,
                             }
-                        };
-                    }
-                    IdReaderEvent::Removed => {
-                        led_pin.set_low().unwrap();
+                        }
+                    };
+                }
+                IdReaderEvent::Removed => {
+                    led_pin.set_low().unwrap();
 
-                        state.stop(timer);
-                    }
+                    state.stop(timer);
                 }
             }
         }

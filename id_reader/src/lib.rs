@@ -66,6 +66,7 @@ pub struct IdReader<SPI, NSS> {
     device: mfrc522::Mfrc522<SPI, NSS>,
 }
 
+#[derive(Copy, Clone)]
 pub enum IdReaderEvent {
     New(Id),
     Removed,
