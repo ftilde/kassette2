@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
-
 #[allow(unused)]
 mod blink;
 mod output;
@@ -11,7 +9,6 @@ mod queue;
 mod sdcard;
 
 use core::mem::ManuallyDrop;
-use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicU8;
 
 use embedded_hal::digital::v2::InputPin;
@@ -36,17 +33,12 @@ use rp_pico::hal::pll::setup_pll_blocking;
 use rp_pico::hal::prelude::*;
 use rp_pico::hal::Spi;
 
-use embedded_alloc::Heap;
-
 use fugit::RateExtU32;
 
 use id_reader::*;
 use rp_pico::hal::timer::Instant;
 
 use crate::sdcard::SDCardFile;
-
-#[global_allocator]
-static HEAP: Heap = Heap::empty();
 
 //#[alloc_error_handler]
 //fn oom(_: Layout) -> ! {
@@ -211,13 +203,6 @@ fn core1_task(
 static mut CORE1_STACK: hal::multicore::Stack<4096> = hal::multicore::Stack::new();
 
 fn run() -> ! {
-    // First thing: Initialize the allocator
-    {
-        static mut HEAP_MEM: [MaybeUninit<u8>; config::HEAP_SIZE] =
-            [MaybeUninit::uninit(); config::HEAP_SIZE];
-        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
-    }
-
     let mut rb = queue::SampleQueue::default();
     let (prod, cons) = rb.split_ref();
 

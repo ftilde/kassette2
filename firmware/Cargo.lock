@@ -226,15 +226,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fcaabb2fef8c910e7f4c7ce9f67a1283a1715879a7c230ca9d6d1ae31f16d91"
 
 [[package]]
-name = "embedded-alloc"
-version = "0.5.0"
-source = "git+https://github.com/rust-embedded/embedded-alloc#a385370febd11fe8c9f920c4d8eb79edc19023fc"
-dependencies = [
- "critical-section",
- "linked_list_allocator",
-]
-
-[[package]]
 name = "embedded-hal"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -417,7 +408,6 @@ dependencies = [
  "config",
  "cortex-m",
  "cortex-m-rt",
- "embedded-alloc",
  "embedded-hal",
  "embedded-qoa",
  "embedded-sdmmc",
@@ -467,12 +457,6 @@ name = "libc"
 version = "0.2.142"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a987beff54b60ffa6d51982e1aa1146bc42f19bd26be28b0586f252fccf5317"
-
-[[package]]
-name = "linked_list_allocator"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9afa463f5405ee81cdb9cc2baf37e08ec7e4c8209442b5d72c04cfb2cd6e6286"
 
 [[package]]
 name = "linux-raw-sys"
