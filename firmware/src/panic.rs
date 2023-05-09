@@ -1,5 +1,3 @@
-use core::cell::RefCell;
-
 use rp_pico::{
     hal::{self, Clock},
     pac,
@@ -50,10 +48,10 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     );
 
     {
-        let fs = RefCell::new(sdcard::SDCardController::init(&mut sd));
+        let mut fs = sdcard::SDCardController::init(&mut sd);
 
         if let Ok(mut file) = SDCardFile::open(
-            &fs,
+            &mut fs,
             "error.log",
             embedded_sdmmc::Mode::ReadWriteCreateOrAppend,
         ) {

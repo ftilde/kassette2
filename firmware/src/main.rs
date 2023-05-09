@@ -10,7 +10,7 @@ mod panic;
 mod queue;
 mod sdcard;
 
-use core::cell::RefCell;
+use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicU8;
 
@@ -409,22 +409,22 @@ type Reader<'a, 'b> = claxon::FlacReader<SDCardFile<'a, 'b, hal::gpio::pin::bank
 enum State<'a, 'b> {
     Stopping {
         id: Id,
-        file: Reader<'a, 'b>,
+        file: ManuallyDrop<Reader<'a, 'b>>,
         done_at: Instant,
     },
     Stopped {
         id: Id,
-        file: Reader<'a, 'b>,
+        file: ManuallyDrop<Reader<'a, 'b>>,
         since: Instant,
     },
     Starting {
         id: Id,
-        file: Reader<'a, 'b>,
+        file: ManuallyDrop<Reader<'a, 'b>>,
         since: Instant,
     },
     Started {
         id: Id,
-        file: Reader<'a, 'b>,
+        file: ManuallyDrop<Reader<'a, 'b>>,
     },
     Empty {
         since: Instant,
@@ -451,6 +451,16 @@ impl State<'_, '_> {
             o => o,
         };
     }
+
+    fn drop_file(self) {
+        if let State::Starting { file, .. }
+        | State::Started { file, .. }
+        | State::Stopped { file, .. }
+        | State::Stopping { file, .. } = self
+        {
+            core::mem::drop(ManuallyDrop::into_inner(file));
+        }
+    }
 }
 
 fn run_until_poweroff(
@@ -463,7 +473,7 @@ fn run_until_poweroff(
     speaker_control: &mut SpeakerControl,
     delay: &mut cortex_m::delay::Delay,
 ) {
-    let fs = RefCell::new(sdcard::SDCardController::init(sd));
+    let mut fs = sdcard::SDCardController::init(sd);
 
     let mut data_fns = [data(100), data(200), data(400), data(800)];
     let mut data_fn_i = 0;
@@ -512,15 +522,18 @@ fn run_until_poweroff(
                                     .checked_duration_since(now)
                                     .unwrap_or(TimerDurationU64::from_ticks(0))),
                         },
-                        _ => {
+                        o => {
+                            o.drop_file();
+
                             // Old file dropped now
                             let file_name = n_id.filename_v2();
-                            let Ok(file) = SDCardFile::open(&fs, &file_name, Mode::ReadOnly) else {
+                            let Ok(file) = SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly) else {
                                     blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
                                 };
                             let Ok(file) = claxon::FlacReader::new(file) else {
                                     blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
                                 };
+                            let file = ManuallyDrop::new(file);
                             State::Starting {
                                 id: n_id,
                                 file,
@@ -551,8 +564,10 @@ fn run_until_poweroff(
             }
         }
 
-        // Update state
-        state = match state {
+        // Update state based on time
+        // TODO: REALLY not sure why we need the replace here, but if we remove it, we get a
+        // "reinitialization might get skipped" error
+        state = match core::mem::replace(&mut state, State::Empty { since: now }) {
             State::Stopping { id, file, done_at } if done_at < now => {
                 speaker_control.off();
                 if turn_off_pressed {
@@ -628,6 +643,7 @@ fn run_until_poweroff(
             //}
         }
     }
+    state.drop_file();
     led_pin.set_low().unwrap();
 
     // TODO actually power stuff off

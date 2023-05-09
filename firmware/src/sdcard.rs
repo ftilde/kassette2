@@ -1,4 +1,4 @@
-use core::{cell::RefCell, mem::MaybeUninit};
+use core::mem::MaybeUninit;
 
 use embedded_sdmmc::{
     filesystem::Mode, BlockSpi, Controller, Directory, File, SdMmcSpi, TimeSource, Timestamp,
@@ -129,7 +129,7 @@ pub fn init_sd<
 }
 
 pub struct SDCardFile<'a, 'b, CS: hal::gpio::PinId> {
-    fs: &'a RefCell<SDCardController<'b, CS>>,
+    fs: &'a mut SDCardController<'b, CS>,
     file: MaybeUninit<embedded_sdmmc::File>,
 }
 
@@ -138,8 +138,7 @@ impl<'a, 'b, CS: hal::gpio::PinId> acid_io::Read for SDCardFile<'a, 'b, CS> {
         // Safety: It only becomes uninit on drop
         let file = unsafe { self.file.assume_init_mut() };
 
-        let mut fs = self.fs.borrow_mut();
-        Ok(fs.read(file, buf))
+        Ok(self.fs.read(file, buf))
     }
 }
 
@@ -148,10 +147,9 @@ impl<'a, 'b, CS: hal::gpio::PinId> core::fmt::Write for SDCardFile<'a, 'b, CS> {
         // Safety: It only becomes uninit on drop
         let file = unsafe { self.file.assume_init_mut() };
 
-        let mut fs = self.fs.borrow_mut();
         let mut s = s.as_bytes();
         loop {
-            let written = fs.write(file, s);
+            let written = self.fs.write(file, s);
             s = &s[written..];
             if s.is_empty() {
                 return Ok(());
@@ -164,18 +162,16 @@ impl<'a, 'b, CS: hal::gpio::PinId> Drop for SDCardFile<'a, 'b, CS> {
     fn drop(&mut self) {
         let file = core::mem::replace(&mut self.file, MaybeUninit::uninit());
         let file = unsafe { file.assume_init() };
-        let mut fs = self.fs.borrow_mut();
-        fs.close(file);
+        self.fs.close(file);
     }
 }
 impl<'a, 'b, CS: hal::gpio::PinId> SDCardFile<'a, 'b, CS> {
     pub fn open(
-        fs: &'a RefCell<SDCardController<'b, CS>>,
+        fs: &'a mut SDCardController<'b, CS>,
         name: &str,
         mode: Mode,
     ) -> Result<Self, embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
-        let mut fs_ref = fs.borrow_mut();
-        let file = MaybeUninit::new(fs_ref.open(name, mode)?);
+        let file = MaybeUninit::new(fs.open(name, mode)?);
         Ok(SDCardFile { file, fs })
     }
 }
