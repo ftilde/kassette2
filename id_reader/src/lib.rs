@@ -53,7 +53,7 @@ impl Id {
             buf[i + 1] = nibbles[1];
             i += 2;
         }
-        for b in b".FLC" {
+        for b in b".QOA" {
             buf[i] = *b;
             i += 1;
         }

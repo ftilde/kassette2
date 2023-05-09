@@ -3,6 +3,16 @@
 version = 3
 
 [[package]]
+name = "acid_io"
+version = "0.1.0"
+source = "git+https://github.com/dataphract/acid_io#2d549317fe9253df8b510ba6bbdcfe623a837286"
+dependencies = [
+ "byteorder",
+ "libc",
+ "memchr",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -111,6 +121,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-qoa"
+version = "0.1.0"
+dependencies = [
+ "acid_io",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -139,21 +156,6 @@ dependencies = [
  "cc",
  "libc",
 ]
-
-[[package]]
-name = "flac-bound"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d438dc79612e982e62d0d86a1fd434b4f536cddf156ce02063cd56fc3d8d426c"
-dependencies = [
- "flac-sys",
-]
-
-[[package]]
-name = "flac-sys"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5ccca1896065c6c3927147467ab3d042565607c01194e36560e84344a02c5c0"
 
 [[package]]
 name = "hash32"
@@ -255,6 +257,12 @@ checksum = "abb12e687cfb44aa40f41fc3978ef76448f9b6038cad6aef4259d3c095a2382e"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "memchr"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
 name = "mfrc522"
@@ -628,7 +636,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "config",
- "flac-bound",
+ "embedded-qoa",
  "id_reader",
  "progressing",
  "rubato",

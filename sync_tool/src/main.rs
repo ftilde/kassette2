@@ -1,13 +1,11 @@
 mod media_definition;
 
 use clap::Parser;
-use flac_bound::{FlacEncoder, WriteWrapper};
 use progressing::Baring;
 use rubato::{InterpolationParameters, InterpolationType, Resampler, SincFixedIn, WindowFunction};
 use std::{
     collections::VecDeque,
     fs::File,
-    io::Write,
     path::{Path, PathBuf},
 };
 use symphonia::core::{
@@ -35,7 +33,7 @@ fn transcode_v2(source: &Path, destination: &Path) {
     let src = File::open(source).expect("failed to open media");
 
     let out_file = File::create(destination).unwrap();
-    let mut out_file = std::io::BufWriter::new(out_file);
+    let out_file = std::io::BufWriter::new(out_file);
 
     let target_sample_rate = config::SAMPLE_RATE;
 
@@ -78,17 +76,18 @@ fn transcode_v2(source: &Path, destination: &Path) {
 
         //let target_sample_rate = input_sample_rate;
 
-        let mut outw = WriteWrapper(&mut out_file);
-        let mut enc = FlacEncoder::new()
-            .unwrap()
-            .compression_level(8)
-            .channels(1)
-            .bits_per_sample(format_bits)
-            .streamable_subset(false)
-            .sample_rate(target_sample_rate)
-            .verify(true)
-            .init_write(&mut outw)
-            .unwrap();
+        const OUT_CHANNELS: u32 = 1;
+        let mut frame_buffer = [0u8; embedded_qoa::max_frame_size(OUT_CHANNELS)];
+        let mut sample_buffer = [0i16; embedded_qoa::max_sample_buffer_len(OUT_CHANNELS)];
+        let mut writer = embedded_qoa::Writer::new(
+            out_file,
+            OUT_CHANNELS,
+            target_sample_rate,
+            Some(len_estimated as _),
+            &mut frame_buffer,
+            &mut sample_buffer,
+        )
+        .unwrap();
 
         //let mut resampler = Resampler::new(input_sample_rate as _, target_sample_rate as _);
 
@@ -122,16 +121,14 @@ fn transcode_v2(source: &Path, destination: &Path) {
         let mut resample_and_output = |batch: &[f32]| {
             let resampled = resampler.process(&[batch], None).unwrap();
 
-            let right_shift_amount = 32 - bits;
-            let left_shift_amount = format_bits - bits;
             let resampled = resampled[0]
                 .iter()
                 .map(|sample| {
                     let s = (sample * (1i32 << 31) as f32) as i32;
-                    (s >> right_shift_amount) << left_shift_amount
+                    (s >> 16) as i16
                 })
                 .collect::<Vec<_>>();
-            enc.process(&[resampled.as_slice()]).unwrap();
+            writer.push(resampled.as_slice()).unwrap();
         };
 
         let mut progress_bar =
@@ -221,10 +218,9 @@ fn transcode_v2(source: &Path, destination: &Path) {
             .collect::<Vec<_>>();
         resample_and_output(&batch);
 
-        enc.finish().unwrap();
+        writer.flush().unwrap();
     }
 
-    out_file.flush().unwrap();
     println!(" Done");
 }
 
@@ -233,7 +229,7 @@ fn sync_v2(source: &Path, destination: &Path) {
     let md = media_definition::load_media_definition(&md_file, source);
 
     for (id, name) in &md {
-        let dst_file = destination.join(id.filename_v2());
+        let dst_file = destination.join(&*id.filename_v2());
         if dst_file.exists() {
             println!(
                 "File {} ({}) exists",

@@ -1,5 +1,6 @@
 use core::mem::MaybeUninit;
 
+use acid_io::SeekFrom;
 use embedded_sdmmc::{
     filesystem::Mode, BlockSpi, Controller, Directory, File, SdMmcSpi, TimeSource, Timestamp,
     Volume, VolumeIdx,
@@ -139,6 +140,23 @@ impl<'a, 'b, CS: hal::gpio::PinId> acid_io::Read for SDCardFile<'a, 'b, CS> {
         let file = unsafe { self.file.assume_init_mut() };
 
         Ok(self.fs.read(file, buf))
+    }
+}
+
+impl<'a, 'b, CS: hal::gpio::PinId> acid_io::Seek for SDCardFile<'a, 'b, CS> {
+    fn seek(&mut self, pos: SeekFrom) -> acid_io::Result<u64> {
+        // Safety: It only becomes uninit on drop
+        let file = unsafe { self.file.assume_init_mut() };
+
+        let res = match pos {
+            SeekFrom::End(n) => file.seek_from_end(n as u32),
+            SeekFrom::Start(n) => file.seek_from_start(n as u32),
+            SeekFrom::Current(n) => file.seek_from_current(n as i32),
+        };
+        if let Err(embedded_sdmmc::filesystem::FileError::InvalidOffset) = res {
+            return Err(acid_io::ErrorKind::InvalidInput.into());
+        }
+        Ok((file.length() - file.left()) as u64)
     }
 }
 

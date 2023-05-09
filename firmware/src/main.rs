@@ -405,7 +405,7 @@ fn dormant_sleep_until_interrupt(
     //    TODO: - see if some clocks can be skipped (and maybe disabled altogether)
 }
 
-type Reader<'a, 'b> = claxon::FlacReader<SDCardFile<'a, 'b, hal::gpio::pin::bank0::Gpio1>>;
+type Reader<'a, 'b> = embedded_qoa::Reader<'a, SDCardFile<'a, 'b, hal::gpio::pin::bank0::Gpio1>>;
 enum State<'a, 'b> {
     Stopping {
         id: Id,
@@ -488,11 +488,14 @@ fn run_until_poweroff(
     // Main loop! -----------------------------------------------------------------
     // ----------------------------------------------------------------------------
 
-    let mut buf = alloc::vec::Vec::with_capacity(1024);
     let sin_test = false;
     let mut turn_off_pressed = false;
 
     let idle_sleep_time = TimerDurationU64::secs(config::IDLE_SLEEP_TIME_SECONDS);
+
+    const NUM_CHANNELS: u32 = 1;
+    let mut frame_buffer = [0u8; embedded_qoa::max_frame_size(NUM_CHANNELS)];
+    let mut sample_buffer = [0i16; embedded_qoa::max_sample_buffer_len(NUM_CHANNELS)];
 
     let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
     loop {
@@ -530,7 +533,7 @@ fn run_until_poweroff(
                             let Ok(file) = SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly) else {
                                     blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
                                 };
-                            let Ok(file) = claxon::FlacReader::new(file) else {
+                            let Ok(file) = Reader::new(file, &mut frame_buffer, &mut sample_buffer) else {
                                     blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
                                 };
                             let file = ManuallyDrop::new(file);
@@ -602,19 +605,18 @@ fn run_until_poweroff(
         let fade_mult_denom = fade_mult_denom as i32;
 
         if let Some(ref mut file) = file {
-            let mut blocks = file.blocks();
-            let Ok(frame) = blocks.read_next_or_eof(core::mem::take(&mut buf)) else {
-                    blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
-                };
+            let Ok(frame) = file.read_frame() else {
+                blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
+            };
+
             let Some(frame) = frame else {
                 state = State::Empty {
                     since: timer.get_counter(),
                 };
                 continue;
             };
-            let channel = frame.channel(0); // We only have mono files here
 
-            for v in channel {
+            for v in frame {
                 let sample = if sin_test {
                     let sample = data_fns[data_fn_i].next().unwrap();
                     i += 1;
@@ -624,14 +626,13 @@ fn run_until_poweroff(
                     }
                     sample
                 } else {
-                    let raw = v >> (config::FORMAT_BITS_PER_SAMPLE - config::BITS_PER_SAMPLE);
+                    let raw =
+                        (*v >> (config::FORMAT_BITS_PER_SAMPLE - config::BITS_PER_SAMPLE)) as i32;
                     let scaled = raw * fade_mult_num / fade_mult_denom;
                     (scaled + config::ZERO_SAMPLE as i32) as u16
                 };
                 while prod.push(sample).is_err() {}
             }
-
-            buf = frame.into_buffer();
         } else {
             //while prod.push(data).is_ok() {
             //    data = data_fns[data_fn_i].next().unwrap();
