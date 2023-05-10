@@ -456,7 +456,7 @@ fn run_until_poweroff(
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
-    _delay: &mut cortex_m::delay::Delay,
+    delay: &mut cortex_m::delay::Delay,
 ) {
     let mut fs = sdcard::SDCardController::init(sd);
 
@@ -519,6 +519,10 @@ fn run_until_poweroff(
                                 SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
                             let mut file =
                                 Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
+                            blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
+                            file.seek(core::time::Duration::from_secs(15 * 60)).unwrap();
+                            blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
+                            led_pin.set_high().unwrap();
                             let file = ManuallyDrop::new(file);
 
                             let now = timer.get_counter();
