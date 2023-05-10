@@ -456,7 +456,7 @@ fn run_until_poweroff(
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
-    delay: &mut cortex_m::delay::Delay,
+    _delay: &mut cortex_m::delay::Delay,
 ) {
     let mut fs = sdcard::SDCardController::init(sd);
 
@@ -515,13 +515,13 @@ fn run_until_poweroff(
 
                             // Old file dropped now
                             let file_name = n_id.filename_v2();
-                            let Ok(file) = SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly) else {
-                                    blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
-                                };
-                            let Ok(file) = Reader::new(file, &mut frame_buffer, &mut sample_buffer) else {
-                                    blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
-                                };
+                            let file =
+                                SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
+                            let mut file =
+                                Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
                             let file = ManuallyDrop::new(file);
+
+                            let now = timer.get_counter();
                             State::Starting {
                                 id: n_id,
                                 file,
@@ -546,21 +546,16 @@ fn run_until_poweroff(
         }
 
         let now = timer.get_counter();
-        if let State::Stopped { since, .. } | State::Empty { since } = state {
-            if since + idle_sleep_time < now {
+        if let State::Stopped { since, .. } | State::Empty { since } = &state {
+            if turn_off_pressed || *since + idle_sleep_time < now {
                 break;
             }
         }
 
         // Update state based on time
-        // TODO: REALLY not sure why we need the replace here, but if we remove it, we get a
-        // "reinitialization might get skipped" error
-        state = match core::mem::replace(&mut state, State::Empty { since: now }) {
+        state = match state {
             State::Stopping { id, file, done_at } if done_at < now => {
                 speaker_control.off();
-                if turn_off_pressed {
-                    break;
-                }
                 State::Stopped {
                     id,
                     file,
@@ -590,9 +585,7 @@ fn run_until_poweroff(
         let fade_mult_denom = fade_mult_denom as i32;
 
         if let Some(ref mut file) = file {
-            let Ok(frame) = file.read_frame() else {
-                blink::blink_signals_loop(led_pin, delay, &blink::BLINK_ERR_3_SHORT);
-            };
+            let frame = file.read_frame().unwrap();
 
             let Some(frame) = frame else {
                 state = State::Empty {
