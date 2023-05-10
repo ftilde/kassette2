@@ -146,11 +146,20 @@ impl<'a, 'b, CS: hal::gpio::PinId> acid_io::Read for SDCardFile<'a, 'b, CS> {
 impl<'a, 'b, CS: hal::gpio::PinId> acid_io::Seek for SDCardFile<'a, 'b, CS> {
     fn seek(&mut self, pos: SeekFrom) -> acid_io::Result<u64> {
         // Safety: It only becomes uninit on drop
-        let file = unsafe { self.file.assume_init_mut() };
+        let mut file = unsafe { self.file.assume_init_mut() };
 
         let res = match pos {
             SeekFrom::End(n) => file.seek_from_end(n as u32),
-            SeekFrom::Start(n) => file.seek_from_start(n as u32),
+            SeekFrom::Start(n) => {
+                const WARMING_READ_SIZE: usize = 1;
+                let seek_target = n.saturating_sub(WARMING_READ_SIZE as _);
+                let res = file.seek_from_start(seek_target as u32);
+                let read_size = n - seek_target;
+                let mut dummy_buffer = [0u8; WARMING_READ_SIZE];
+                self.fs
+                    .read(&mut file, &mut dummy_buffer[..read_size as usize]);
+                res
+            }
             SeekFrom::Current(n) => file.seek_from_current(n as i32),
         };
         if let Err(embedded_sdmmc::filesystem::FileError::InvalidOffset) = res {
