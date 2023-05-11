@@ -220,7 +220,6 @@ fn run() -> ! {
         )
     };
 
-    let core = unsafe { pac::CorePeripherals::steal() };
     let mut pac = unsafe { pac::Peripherals::steal() };
 
     // Set up the watchdog driver - needed by the clock setup code
@@ -276,7 +275,6 @@ fn run() -> ! {
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
     let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio16, cons);
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     let mut led_pin = pins.led.into_push_pull_output();
     let mut button_pin = pins.gpio5.into_pull_up_input();
 
@@ -304,7 +302,6 @@ fn run() -> ! {
             &mut led_pin,
             &mut button_pin,
             &mut speaker_control,
-            &mut delay,
         );
         speaker_control.off();
         sm = sm_s.stop();
@@ -456,7 +453,6 @@ fn run_until_poweroff(
     led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
-    delay: &mut cortex_m::delay::Delay,
 ) {
     let mut fs = sdcard::SDCardController::init(sd);
 
@@ -519,9 +515,9 @@ fn run_until_poweroff(
                                 SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
                             let mut file =
                                 Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
-                            blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
-                            file.seek(core::time::Duration::from_secs(15 * 60)).unwrap();
-                            blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
+                            //blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
+                            file.seek(core::time::Duration::from_secs(30 * 60)).unwrap();
+                            //blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
                             led_pin.set_high().unwrap();
                             let file = ManuallyDrop::new(file);
 
