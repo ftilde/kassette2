@@ -328,6 +328,10 @@ fn run() -> ! {
     loop {
         let sm_s = sm.start();
 
+        led_pin.set_high().unwrap();
+        cortex_m::asm::delay(30_000_000);
+        led_pin.set_low().unwrap();
+
         run_until_poweroff(
             &mut prod,
             &mut event_cons,
@@ -339,6 +343,14 @@ fn run() -> ! {
         );
         speaker_control.off();
         sm = sm_s.stop();
+
+        led_pin.set_high().unwrap();
+        cortex_m::asm::delay(10_000_000);
+        led_pin.set_low().unwrap();
+        cortex_m::asm::delay(10_000_000);
+        led_pin.set_high().unwrap();
+        cortex_m::asm::delay(10_000_000);
+        led_pin.set_low().unwrap();
 
         transition_core1_blocking(Core1State::Stopped);
         // Drain queue of potential old events after core 1 has stopped.
@@ -508,7 +520,7 @@ fn run_until_poweroff(
         file.seek(core::time::Duration::from_millis(state.pos_millis as _))
             .unwrap();
         let file = ManuallyDrop::new(file);
-        State::Starting {
+        State::Stopped {
             id: state.id,
             file,
             since: timer.get_counter(),
@@ -529,6 +541,7 @@ fn run_until_poweroff(
     let idle_sleep_time = TimerDurationU64::secs(config::IDLE_SLEEP_TIME_SECONDS);
 
     let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
+    let context_seek = core::time::Duration::from_millis(2 * config::FADE_DURATION_MILLIS);
     loop {
         if let Some(e) = event_consumer.pop() {
             let now = timer.get_counter();
@@ -543,11 +556,19 @@ fn run_until_poweroff(
                             State::Starting { id, file, since }
                         }
                         State::Started { id, file } if id == n_id => State::Started { id, file },
-                        State::Stopped { id, file, since: _ } if id == n_id => State::Starting {
+                        State::Stopped {
                             id,
-                            file,
-                            since: now,
-                        },
+                            mut file,
+                            since: _,
+                        } if id == n_id => {
+                            let seek_target = file.playback_position().saturating_sub(context_seek);
+                            file.seek(seek_target).unwrap();
+                            State::Starting {
+                                id,
+                                file,
+                                since: now,
+                            }
+                        }
                         State::Stopping { id, file, done_at } if id == n_id => State::Starting {
                             id,
                             file,
