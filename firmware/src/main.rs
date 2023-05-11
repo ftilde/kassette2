@@ -657,6 +657,8 @@ fn run_until_poweroff(
             let frame = file.read_frame().unwrap();
 
             let Some(frame) = frame else {
+                // Drop current file
+                let _ = state.into_file();
                 state = State::Empty {
                     since: timer.get_counter(),
                 };
