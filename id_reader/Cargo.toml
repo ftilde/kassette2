@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 embedded-hal = "0.2.7"
 mfrc522 = "0.4.1"
+bytemuck = { version = "1.12", features=["derive"] }

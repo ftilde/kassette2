@@ -56,6 +56,12 @@ impl<CS: PinId> SDCardController<'_, CS> {
             .open_file_in_dir(&mut self.volume, &self.root_dir, filename, mode)
     }
 
+    pub fn try_unlink(&mut self, path: &str) {
+        let _ = self
+            .controller
+            .delete_file_in_dir(&self.volume, &self.root_dir, path);
+    }
+
     pub fn close(&mut self, file: File) {
         self.controller.close_file(&self.volume, file).unwrap();
     }
@@ -140,6 +146,19 @@ impl<'a, 'b, CS: hal::gpio::PinId> acid_io::Read for SDCardFile<'a, 'b, CS> {
         let file = unsafe { self.file.assume_init_mut() };
 
         Ok(self.fs.read(file, buf))
+    }
+}
+
+impl<'a, 'b, CS: hal::gpio::PinId> acid_io::Write for SDCardFile<'a, 'b, CS> {
+    fn write(&mut self, src: &[u8]) -> acid_io::Result<usize> {
+        // Safety: It only becomes uninit on drop
+        let mut file = unsafe { self.file.assume_init_mut() };
+        Ok(self.fs.write(&mut file, src))
+    }
+
+    fn flush(&mut self) -> acid_io::Result<()> {
+        // Nop. embedded_sdmmc always writes stuff out.
+        Ok(())
     }
 }
 

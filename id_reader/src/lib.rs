@@ -3,7 +3,8 @@
 use embedded_hal::blocking::spi;
 use embedded_hal::digital::v2::OutputPin;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct Id(pub [u8; 4]);
 
 fn fmt_nibble(nibble: u8) -> u8 {

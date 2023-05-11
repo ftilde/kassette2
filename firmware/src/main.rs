@@ -200,6 +200,40 @@ fn core1_task(
     }
 }
 
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct SaveState {
+    pos_millis: u32,
+    id: Id,
+}
+
+const SAVE_STATE_FILE_NAME: &str = "save.bin";
+
+fn load_save_state<CS: hal::gpio::PinId>(
+    fs: &mut sdcard::SDCardController<CS>,
+) -> Option<SaveState> {
+    use acid_io::Read;
+    let mut file = SDCardFile::open(fs, SAVE_STATE_FILE_NAME, Mode::ReadOnly).ok()?;
+    let mut buffer = [0u8; core::mem::size_of::<SaveState>()];
+    file.read_exact(&mut buffer).ok();
+
+    Some(bytemuck::pod_read_unaligned(&buffer))
+}
+
+fn save_state<CS: hal::gpio::PinId>(
+    fs: &mut sdcard::SDCardController<CS>,
+    state: Option<SaveState>,
+) {
+    if let Some(state) = state {
+        use acid_io::Write;
+        let mut file =
+            SDCardFile::open(fs, SAVE_STATE_FILE_NAME, Mode::ReadWriteCreateOrTruncate).unwrap();
+        file.write_all(bytemuck::bytes_of(&state)).unwrap();
+    } else {
+        fs.try_unlink(SAVE_STATE_FILE_NAME);
+    }
+}
+
 static mut CORE1_STACK: hal::multicore::Stack<4096> = hal::multicore::Stack::new();
 
 fn run() -> ! {
@@ -413,7 +447,7 @@ enum State<'a, 'b> {
     },
 }
 
-impl State<'_, '_> {
+impl<'a, 'b> State<'a, 'b> {
     fn stop(&mut self, timer: &hal::Timer) {
         use State::*;
         let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
@@ -434,13 +468,15 @@ impl State<'_, '_> {
         };
     }
 
-    fn drop_file(self) {
-        if let State::Starting { file, .. }
-        | State::Started { file, .. }
-        | State::Stopped { file, .. }
-        | State::Stopping { file, .. } = self
+    fn into_file(self) -> Option<(Id, Reader<'a, 'b>)> {
+        if let State::Starting { file, id, .. }
+        | State::Started { file, id, .. }
+        | State::Stopped { file, id, .. }
+        | State::Stopping { file, id, .. } = self
         {
-            core::mem::drop(ManuallyDrop::into_inner(file));
+            Some((id, ManuallyDrop::into_inner(file)))
+        } else {
+            None
         }
     }
 }
@@ -461,8 +497,26 @@ fn run_until_poweroff(
     //let mut data = 0;
     let mut i = 0;
 
-    let mut state: State = State::Empty {
-        since: timer.get_counter(),
+    const NUM_CHANNELS: u32 = 1;
+    let mut frame_buffer = [0u8; embedded_qoa::max_frame_size(NUM_CHANNELS)];
+    let mut sample_buffer = [0i16; embedded_qoa::max_sample_buffer_len(NUM_CHANNELS)];
+
+    let mut state: State = if let Some(state) = load_save_state(&mut fs) {
+        let file_name = state.id.filename_v2();
+        let file = SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
+        let mut file = Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
+        file.seek(core::time::Duration::from_millis(state.pos_millis as _))
+            .unwrap();
+        let file = ManuallyDrop::new(file);
+        State::Starting {
+            id: state.id,
+            file,
+            since: timer.get_counter(),
+        }
+    } else {
+        State::Empty {
+            since: timer.get_counter(),
+        }
     };
 
     // ----------------------------------------------------------------------------
@@ -473,10 +527,6 @@ fn run_until_poweroff(
     let mut turn_off_pressed = false;
 
     let idle_sleep_time = TimerDurationU64::secs(config::IDLE_SLEEP_TIME_SECONDS);
-
-    const NUM_CHANNELS: u32 = 1;
-    let mut frame_buffer = [0u8; embedded_qoa::max_frame_size(NUM_CHANNELS)];
-    let mut sample_buffer = [0i16; embedded_qoa::max_sample_buffer_len(NUM_CHANNELS)];
 
     let fade_duration = TimerDurationU64::millis(config::FADE_DURATION_MILLIS);
     loop {
@@ -507,7 +557,7 @@ fn run_until_poweroff(
                                     .unwrap_or(TimerDurationU64::from_ticks(0))),
                         },
                         o => {
-                            o.drop_file();
+                            core::mem::drop(o.into_file());
 
                             // Old file dropped now
                             let file_name = n_id.filename_v2();
@@ -515,9 +565,7 @@ fn run_until_poweroff(
                                 SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
                             let mut file =
                                 Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
-                            //blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
                             file.seek(core::time::Duration::from_secs(30 * 60)).unwrap();
-                            //blink::blink_signals(led_pin, delay, &blink::BLINK_ERR_2_SHORT);
                             led_pin.set_high().unwrap();
                             let file = ManuallyDrop::new(file);
 
@@ -622,7 +670,11 @@ fn run_until_poweroff(
             //}
         }
     }
-    state.drop_file();
+    let s_state = state.into_file().map(|(id, mut f)| SaveState {
+        pos_millis: f.playback_position().as_millis() as u32,
+        id,
+    });
+    save_state(&mut fs, s_state);
     led_pin.set_low().unwrap();
 
     // TODO actually power stuff off
