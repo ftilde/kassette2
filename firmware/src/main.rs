@@ -304,10 +304,11 @@ fn run() -> ! {
         &embedded_hal::spi::MODE_0,
     );
 
-    let mut speaker_control = SpeakerControl::new(pins.gpio17);
+    let mut speaker_control = SpeakerControl::new(pins.gpio28);
 
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
-    let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, pins.gpio16, cons);
+    let output_pin = pins.gpio20;
+    let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, output_pin, cons);
 
     let mut led_pin = pins.led.into_push_pull_output();
     let mut button_pin = pins.gpio5.into_pull_up_input();
@@ -586,7 +587,7 @@ fn run_until_poweroff(
                                 SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
                             let mut file =
                                 Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
-                            file.seek(core::time::Duration::from_secs(30 * 60)).unwrap();
+                            //file.seek(core::time::Duration::from_secs(45 * 60)).unwrap();
                             led_pin.set_high().unwrap();
                             let file = ManuallyDrop::new(file);
 
