@@ -310,7 +310,7 @@ fn run() -> ! {
     let output_pin = pins.gpio20;
     let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, output_pin, cons);
 
-    let mut led_pin = pins.led.into_push_pull_output();
+    let mut led_pin = pins.gpio15.into_push_pull_output();
     let mut button_pin = pins.gpio5.into_pull_up_input();
 
     let _test = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
