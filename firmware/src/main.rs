@@ -307,7 +307,7 @@ fn run() -> ! {
     let mut speaker_control = SpeakerControl::new(pins.gpio28);
 
     let mut timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS);
-    let output_pin = pins.gpio20;
+    let output_pin = pins.gpio18;
     let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, output_pin, cons);
 
     let mut led_pin = pins.gpio15.into_push_pull_output();
