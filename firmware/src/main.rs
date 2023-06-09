@@ -44,36 +44,6 @@ use crate::sdcard::SDCardFile;
 //    loop {}
 //}
 
-fn data(freq_hz: u32) -> impl Iterator<Item = u16> {
-    let period_samples = config::SAMPLE_RATE / freq_hz;
-    let mut i: u32 = 0;
-    const RANGE: u32 = 1 << config::BITS_PER_SAMPLE;
-    let sin_table: [u16; RANGE as usize] = core::array::from_fn(|i| {
-        let f = i as f32 * core::f32::consts::TAU / (RANGE as f32);
-        use micromath::F32Ext;
-        let val = (((-f32::cos(f) + 1.0) * 0.5) * config::MAX_SAMPLE as f32) as u32;
-        val.min(config::MAX_SAMPLE as u32) as u16
-    });
-    core::iter::from_fn(move || {
-        //let f = i as f32 * core::f32::consts::TAU / (period_samples as f32);
-        //use micromath::F32Ext;
-        //let val = (((-f32::cos(f) + 1.0) * 0.5) * u8::MAX as f32) as u32;
-
-        let val;
-        //if (i / period_samples) % 2 == 0 {
-        //    val = 255;
-        //} else {
-        //    val = 0;
-        //}
-
-        val = (i * RANGE / period_samples) % RANGE;
-        let val = sin_table[val as usize];
-
-        i += 1;
-        Some(val as u16)
-    })
-}
-
 struct SpeakerControl {
     pin: hal::gpio::DynPin,
 }
@@ -497,11 +467,6 @@ fn run_until_poweroff(
 ) {
     let mut fs = sdcard::SDCardController::init(sd);
 
-    let mut data_fns = [data(100), data(200), data(400), data(800)];
-    let mut data_fn_i = 0;
-    //let mut data = 0;
-    let mut i = 0;
-
     const NUM_CHANNELS: u32 = 1;
     let mut frame_buffer = [0u8; embedded_qoa::max_frame_size(NUM_CHANNELS)];
     let mut sample_buffer = [0i16; embedded_qoa::max_sample_buffer_len(NUM_CHANNELS)];
@@ -528,7 +493,6 @@ fn run_until_poweroff(
     // Main loop! -----------------------------------------------------------------
     // ----------------------------------------------------------------------------
 
-    let sin_test = false;
     let mut turn_off_pressed = false;
 
     let idle_sleep_time = TimerDurationU64::secs(config::IDLE_SLEEP_TIME_SECONDS);
@@ -660,31 +624,11 @@ fn run_until_poweroff(
             };
 
             for v in frame {
-                let sample = if sin_test {
-                    let sample = data_fns[data_fn_i].next().unwrap();
-                    i += 1;
-                    if i == 40000 {
-                        i = 0;
-                        data_fn_i = (data_fn_i + 1) % data_fns.len();
-                    }
-                    sample
-                } else {
-                    let raw =
-                        (*v >> (config::FORMAT_BITS_PER_SAMPLE - config::BITS_PER_SAMPLE)) as i32;
-                    let scaled = raw * fade_mult_num / fade_mult_denom;
-                    (scaled + config::ZERO_SAMPLE as i32) as u16
-                };
+                let raw = (*v >> (config::FORMAT_BITS_PER_SAMPLE - config::BITS_PER_SAMPLE)) as i32;
+                let scaled = raw * fade_mult_num / fade_mult_denom;
+                let sample = (scaled + config::ZERO_SAMPLE as i32) as u16;
                 while prod.push(sample).is_err() {}
             }
-        } else {
-            //while prod.push(data).is_ok() {
-            //    data = data_fns[data_fn_i].next().unwrap();
-            //    i += 1;
-            //    if i == 40000 {
-            //        i = 0;
-            //        data_fn_i = (data_fn_i + 1) % data_fns.len();
-            //    }
-            //}
         }
     }
     let s_state = state.into_file().map(|(id, mut f)| SaveState {
