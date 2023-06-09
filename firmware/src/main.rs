@@ -1,8 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[allow(unused)]
-mod blink;
+mod led;
 mod output;
 mod panic;
 mod queue;
@@ -310,8 +309,10 @@ fn run() -> ! {
     let output_pin = pins.gpio18;
     let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, output_pin, cons);
 
-    let mut led_pin = pins.gpio15.into_push_pull_output();
+    let led_pin = pins.gpio15.into_push_pull_output();
     let mut button_pin = pins.gpio5.into_pull_up_input();
+
+    crate::led::setup_timer_interrupt(&mut timer, led_pin);
 
     let _test = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
         core1_task(event_prod, id_reader_spi, spi_csn, id_reader_reset)
@@ -329,29 +330,18 @@ fn run() -> ! {
     loop {
         let sm_s = sm.start();
 
-        led_pin.set_high().unwrap();
-        cortex_m::asm::delay(30_000_000);
-        led_pin.set_low().unwrap();
+        led::set_blink_sequence(BLINK_SEQ_START);
 
         run_until_poweroff(
             &mut prod,
             &mut event_cons,
             &mut sd,
             &mut timer,
-            &mut led_pin,
             &mut button_pin,
             &mut speaker_control,
         );
         speaker_control.off();
         sm = sm_s.stop();
-
-        led_pin.set_high().unwrap();
-        cortex_m::asm::delay(10_000_000);
-        led_pin.set_low().unwrap();
-        cortex_m::asm::delay(10_000_000);
-        led_pin.set_high().unwrap();
-        cortex_m::asm::delay(10_000_000);
-        led_pin.set_low().unwrap();
 
         transition_core1_blocking(Core1State::Stopped);
         // Drain queue of potential old events after core 1 has stopped.
@@ -494,12 +484,14 @@ impl<'a, 'b> State<'a, 'b> {
     }
 }
 
+const BLINK_SEQ_START: [i8; 3] = [30, 0, 0];
+const BLINK_SEQ_END: [i8; 3] = [10, -10, 10];
+
 fn run_until_poweroff(
     prod: &mut QueueProducer,
     event_consumer: &mut CardEventConsumer,
     sd: &mut sdcard::SDSpi<hal::gpio::bank0::Gpio1>,
     timer: &mut hal::Timer,
-    led_pin: &mut dyn OutputPin<Error = core::convert::Infallible>,
     button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
 ) {
@@ -548,8 +540,6 @@ fn run_until_poweroff(
             let now = timer.get_counter();
             match e {
                 IdReaderEvent::New(n_id) => {
-                    led_pin.set_high().unwrap();
-
                     speaker_control.on();
 
                     state = match state {
@@ -564,6 +554,8 @@ fn run_until_poweroff(
                         } if id == n_id => {
                             let seek_target = file.playback_position().saturating_sub(context_seek);
                             file.seek(seek_target).unwrap();
+
+                            led::set_blink_sequence(BLINK_SEQ_START);
                             State::Starting {
                                 id,
                                 file,
@@ -585,13 +577,14 @@ fn run_until_poweroff(
                             let file_name = n_id.filename_v2();
                             let file =
                                 SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
-                            let mut file =
+                            let file =
                                 Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
                             //file.seek(core::time::Duration::from_secs(45 * 60)).unwrap();
-                            led_pin.set_high().unwrap();
                             let file = ManuallyDrop::new(file);
 
                             let now = timer.get_counter();
+
+                            led::set_blink_sequence(BLINK_SEQ_START);
                             State::Starting {
                                 id: n_id,
                                 file,
@@ -601,8 +594,6 @@ fn run_until_poweroff(
                     };
                 }
                 IdReaderEvent::Removed => {
-                    led_pin.set_low().unwrap();
-
                     state.stop(timer);
                 }
             }
@@ -613,6 +604,8 @@ fn run_until_poweroff(
         if button_pin.is_low().unwrap() {
             state.stop(timer);
             turn_off_pressed = true;
+
+            led::set_blink_sequence(BLINK_SEQ_END);
         }
 
         let now = timer.get_counter();
@@ -699,7 +692,4 @@ fn run_until_poweroff(
         id,
     });
     save_state(&mut fs, s_state);
-    led_pin.set_low().unwrap();
-
-    // TODO actually power stuff off
 }

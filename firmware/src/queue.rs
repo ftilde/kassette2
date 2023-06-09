@@ -21,16 +21,10 @@ struct TimerIrqData {
     alarm: Alarm0,
     queue_input: QueueConsumer,
     pio_tx: PioTx,
-    //led: LedPin,
 }
 static TIMER_IRQ_DATA: Mutex<RefCell<Option<TimerIrqData>>> = Mutex::new(RefCell::new(None));
 
-pub fn setup_timer_interrupt(
-    timer: &mut hal::Timer,
-    queue_input: QueueConsumer,
-    pio_tx: PioTx,
-    //led: LedPin,
-) {
+pub fn setup_timer_interrupt(timer: &mut hal::Timer, queue_input: QueueConsumer, pio_tx: PioTx) {
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
     }
@@ -43,18 +37,16 @@ pub fn setup_timer_interrupt(
             alarm: alarm0,
             queue_input,
             pio_tx,
-            //led,
         }));
     });
 }
 
 #[interrupt]
 fn TIMER_IRQ_0() {
-    // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndButton>`
     static mut DATA: Option<TimerIrqData> = None;
 
     // This is one-time lazy initialisation. We steal the variables given to us
-    // via `GLOBAL_PINS`.
+    // via `DATA`.
     let data = if let Some(data) = DATA {
         data
     } else {

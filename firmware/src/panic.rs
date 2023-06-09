@@ -3,10 +3,9 @@ use rp_pico::{
     pac,
 };
 
-use crate::{
-    blink,
-    sdcard::{self, SDCardFile},
-};
+use crate::sdcard::{self, SDCardFile};
+
+use embedded_hal::digital::v2::OutputPin;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -64,12 +63,26 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     let mut led_pin = pins.led.into_push_pull_output();
 
-    blink::blink_signals_loop(
-        &mut led_pin,
-        &mut delay,
-        &[
-            1, 0, 1, 0, 1, 0, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0,
-            0,
-        ],
-    );
+    loop {
+        for _ in 0..3 {
+            let _ = led_pin.set_high();
+            delay.delay_ms(200);
+            let _ = led_pin.set_low();
+            delay.delay_ms(200);
+        }
+        delay.delay_ms(400);
+        for _ in 0..3 {
+            let _ = led_pin.set_high();
+            delay.delay_ms(600);
+            let _ = led_pin.set_low();
+            delay.delay_ms(600);
+        }
+        for _ in 0..3 {
+            let _ = led_pin.set_high();
+            delay.delay_ms(200);
+            let _ = led_pin.set_low();
+            delay.delay_ms(200);
+        }
+        delay.delay_ms(1000);
+    }
 }
