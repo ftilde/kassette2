@@ -456,6 +456,7 @@ impl<'a, 'b> State<'a, 'b> {
 
 const BLINK_SEQ_START: [i8; 3] = [30, 0, 0];
 const BLINK_SEQ_END: [i8; 3] = [10, -10, 10];
+const BLINK_SEQ_ERROR: [i8; 3] = [50, -50, 50];
 
 fn run_until_poweroff(
     prod: &mut QueueProducer,
@@ -539,20 +540,46 @@ fn run_until_poweroff(
 
                             // Old file dropped now
                             let file_name = n_id.filename_v2();
-                            let file =
-                                SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
-                            let file =
-                                Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
-                            //file.seek(core::time::Duration::from_secs(45 * 60)).unwrap();
-                            let file = ManuallyDrop::new(file);
+                            let res = SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly);
+                            match res {
+                                Ok(file) => {
+                                    let file =
+                                        Reader::new(file, &mut frame_buffer, &mut sample_buffer)
+                                            .unwrap();
+                                    //file.seek(core::time::Duration::from_secs(45 * 60)).unwrap();
+                                    let file = ManuallyDrop::new(file);
 
-                            let now = timer.get_counter();
+                                    let now = timer.get_counter();
 
-                            led::set_blink_sequence(BLINK_SEQ_START);
-                            State::Starting {
-                                id: n_id,
-                                file,
-                                since: now,
+                                    led::set_blink_sequence(BLINK_SEQ_START);
+                                    State::Starting {
+                                        id: n_id,
+                                        file,
+                                        since: now,
+                                    }
+                                }
+                                Err(embedded_sdmmc::Error::FileNotFound) => {
+                                    // Not entirely sure why this is needed here since we
+                                    // deconstruct res, but... oh well...
+                                    core::mem::drop(res);
+
+                                    led::set_blink_sequence(BLINK_SEQ_ERROR);
+
+                                    if let Ok(mut file) = SDCardFile::open(
+                                        &mut fs,
+                                        "error.log",
+                                        embedded_sdmmc::Mode::ReadWriteCreateOrAppend,
+                                    ) {
+                                        use core::fmt::Write;
+                                        let _ = writeln!(file, "===============================");
+                                        let _ =
+                                            writeln!(file, "Failed to open file: {}", &*file_name);
+                                    };
+                                    State::Empty { since: now }
+                                }
+                                Err(o) => {
+                                    panic!("Unexpected error while opening file: {:?}", o);
+                                }
                             }
                         }
                     };
