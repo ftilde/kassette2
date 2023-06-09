@@ -585,6 +585,7 @@ fn run_until_poweroff(
                     };
                 }
                 IdReaderEvent::Removed => {
+                    led::set_blink_sequence(BLINK_SEQ_END);
                     state.stop(timer);
                 }
             }
