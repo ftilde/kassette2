@@ -32,7 +32,12 @@ fn transcode_v2(source: &Path, destination: &Path) {
     // Open the media source.
     let src = File::open(source).expect("failed to open media");
 
-    let out_file = File::create(destination).unwrap();
+    let destination_tmp = destination.with_file_name({
+        let mut filename = destination.file_name().unwrap().to_owned();
+        filename.push(".part");
+        filename
+    });
+    let out_file = File::create(&destination_tmp).unwrap();
     let out_file = std::io::BufWriter::new(out_file);
 
     let target_sample_rate = config::SAMPLE_RATE;
@@ -220,6 +225,8 @@ fn transcode_v2(source: &Path, destination: &Path) {
 
         writer.flush().unwrap();
     }
+
+    std::fs::rename(destination_tmp, destination).unwrap();
 
     println!(" Done");
 }
