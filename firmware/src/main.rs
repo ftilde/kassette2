@@ -564,6 +564,7 @@ fn run_until_poweroff(
                                     core::mem::drop(res);
 
                                     led::set_blink_sequence(BLINK_SEQ_ERROR);
+                                    speaker_control.off();
 
                                     if let Ok(mut file) = SDCardFile::open(
                                         &mut fs,
@@ -645,6 +646,7 @@ fn run_until_poweroff(
             let Some(frame) = frame else {
                 // Drop current file
                 let _ = state.into_file();
+                speaker_control.off();
                 state = State::Empty {
                     since: timer.get_counter(),
                 };
