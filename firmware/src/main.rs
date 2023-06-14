@@ -2,6 +2,7 @@
 #![no_main]
 
 mod led;
+mod onoffbutton;
 mod output;
 mod panic;
 mod queue;
@@ -10,7 +11,6 @@ mod sdcard;
 use core::mem::ManuallyDrop;
 use core::sync::atomic::AtomicU8;
 
-use embedded_hal::digital::v2::InputPin;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_sdmmc::Mode;
 use fugit::TimerDurationU64;
@@ -280,7 +280,8 @@ fn run() -> ! {
     let mut sm = output::setup_output(pac.PIO0, &mut timer, &mut pac.RESETS, output_pin, cons);
 
     let led_pin = pins.gpio15.into_push_pull_output();
-    let mut button_pin = pins.gpio5.into_pull_up_input();
+    let button_pin = pins.gpio5.into_pull_up_input();
+    onoffbutton::setup_interrupt(&mut timer, button_pin);
 
     crate::led::setup_timer_interrupt(&mut timer, led_pin);
 
@@ -307,7 +308,7 @@ fn run() -> ! {
             &mut event_cons,
             &mut sd,
             &mut timer,
-            &mut button_pin,
+            //&mut button_pin,
             &mut speaker_control,
         );
         speaker_control.off();
@@ -317,14 +318,14 @@ fn run() -> ! {
         // Drain queue of potential old events after core 1 has stopped.
         while event_cons.pop().is_some() {}
 
-        dormant_sleep_until_interrupt(&mut clocks, &mut button_pin);
+        dormant_sleep_until_interrupt(&mut clocks /*, &mut button_pin*/);
         transition_core1_blocking(Core1State::Running);
     }
 }
 
 fn dormant_sleep_until_interrupt(
     clocks: &mut hal::clocks::ClocksManager,
-    button_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio5, hal::gpio::Input<hal::gpio::PullUp>>,
+    //button_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio5, hal::gpio::Input<hal::gpio::PullUp>>,
 ) {
     let mut pac = unsafe { pac::Peripherals::steal() };
 
@@ -389,7 +390,7 @@ fn dormant_sleep_until_interrupt(
     clocks.peripheral_clock.enable();
 
     // Wait for button to turn off again
-    while button_pin.is_low().unwrap() {}
+    while !onoffbutton::is_released() {}
 
     //    TODO: - see if some clocks can be skipped (and maybe disabled altogether)
 }
@@ -463,7 +464,7 @@ fn run_until_poweroff(
     event_consumer: &mut CardEventConsumer,
     sd: &mut sdcard::SDSpi<hal::gpio::bank0::Gpio1>,
     timer: &mut hal::Timer,
-    button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
+    //button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
 ) {
     let mut fs = sdcard::SDCardController::init(sd);
@@ -493,6 +494,7 @@ fn run_until_poweroff(
     // ----------------------------------------------------------------------------
     // Main loop! -----------------------------------------------------------------
     // ----------------------------------------------------------------------------
+    onoffbutton::clear();
 
     let mut turn_off_pressed = false;
 
@@ -594,7 +596,7 @@ fn run_until_poweroff(
 
         //TODO: Ideally we want an interrupt to handle this because we might miss the low state
         //otherwise
-        if button_pin.is_low().unwrap() && !turn_off_pressed {
+        if onoffbutton::was_released() && !turn_off_pressed {
             state.stop(timer);
             turn_off_pressed = true;
 
