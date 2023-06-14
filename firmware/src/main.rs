@@ -351,6 +351,9 @@ fn dormant_sleep_until_interrupt(
     pac.PLL_USB.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
     pac.PLL_SYS.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
 
+    // Wait for button to turn off again
+    while !onoffbutton::is_released() {}
+
     // Set up wake up interrupt
     // Note: Clearing is not required since the level interrupts are not latched
     pac.IO_BANK0.dormant_wake_inte[0].write(|w| w.gpio5_level_low().set_bit());
@@ -388,9 +391,6 @@ fn dormant_sleep_until_interrupt(
     clocks.gpio_output3_clock.enable();
     clocks.rtc_clock.enable();
     clocks.peripheral_clock.enable();
-
-    // Wait for button to turn off again
-    while !onoffbutton::is_released() {}
 
     //    TODO: - see if some clocks can be skipped (and maybe disabled altogether)
 }
@@ -596,7 +596,7 @@ fn run_until_poweroff(
 
         //TODO: Ideally we want an interrupt to handle this because we might miss the low state
         //otherwise
-        if onoffbutton::was_released() && !turn_off_pressed {
+        if onoffbutton::was_pressed() && !turn_off_pressed {
             state.stop(timer);
             turn_off_pressed = true;
 

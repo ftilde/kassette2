@@ -47,13 +47,13 @@ pub fn clear() {
     });
 }
 
-pub fn was_released() -> bool {
+pub fn was_pressed() -> bool {
     cortex_m::interrupt::free(|cs| {
         let data = IRQ_DATA.borrow(cs);
         let mut data = data.borrow_mut();
         let data = data.as_mut().unwrap();
 
-        matches!(data.last_event, Some(ButtonState::Released))
+        matches!(data.last_event, Some(ButtonState::Pressed))
     })
 }
 
