@@ -594,7 +594,7 @@ fn run_until_poweroff(
 
         //TODO: Ideally we want an interrupt to handle this because we might miss the low state
         //otherwise
-        if button_pin.is_low().unwrap() {
+        if button_pin.is_low().unwrap() && !turn_off_pressed {
             state.stop(timer);
             turn_off_pressed = true;
 
