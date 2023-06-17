@@ -18,7 +18,7 @@ pub type ButtonPin = gpio::Pin<gpio::bank0::Gpio5, gpio::PullUpInput>;
 
 #[derive(Copy, Clone)]
 enum DebouncingState {
-    Debouncing,
+    Debouncing(ButtonState),
     Fixed(ButtonState),
 }
 
@@ -32,7 +32,8 @@ struct IrqData {
     button: ButtonPin,
     alarm: Alarm2,
     state: DebouncingState,
-    last_event: Option<ButtonState>,
+    event_pressed: bool,
+    event_released: bool,
 }
 
 static IRQ_DATA: Mutex<RefCell<Option<IrqData>>> = Mutex::new(RefCell::new(None));
@@ -43,7 +44,8 @@ pub fn clear() {
         let mut data = data.borrow_mut();
         let data = data.as_mut().unwrap();
 
-        data.last_event = None;
+        data.event_pressed = false;
+        data.event_released = false;
     });
 }
 
@@ -53,7 +55,7 @@ pub fn was_pressed() -> bool {
         let mut data = data.borrow_mut();
         let data = data.as_mut().unwrap();
 
-        matches!(data.last_event, Some(ButtonState::Pressed))
+        data.event_pressed
     })
 }
 
@@ -81,7 +83,8 @@ pub fn setup_interrupt(timer: &mut hal::Timer, button: ButtonPin) {
             button,
             state: DebouncingState::Fixed(ButtonState::Released),
             alarm,
-            last_event: None,
+            event_pressed: false,
+            event_released: false,
         }));
 
         let data = IRQ_DATA.borrow(cs);
@@ -105,7 +108,7 @@ fn IO_IRQ_BANK0() {
         if data.button.interrupt_status(Interrupt::EdgeLow) {
             if matches!(data.state, DebouncingState::Fixed(ButtonState::Released)) {
                 let _ = data.alarm.schedule(DEBOUNCE_DURATION_MILLIS.millis());
-                data.state = DebouncingState::Debouncing;
+                data.state = DebouncingState::Debouncing(ButtonState::Pressed);
             }
             data.button.clear_interrupt(Interrupt::EdgeLow);
         }
@@ -113,7 +116,7 @@ fn IO_IRQ_BANK0() {
         if data.button.interrupt_status(Interrupt::EdgeHigh) {
             if matches!(data.state, DebouncingState::Fixed(ButtonState::Pressed)) {
                 let _ = data.alarm.schedule(DEBOUNCE_DURATION_MILLIS.millis());
-                data.state = DebouncingState::Debouncing;
+                data.state = DebouncingState::Debouncing(ButtonState::Released);
             }
             data.button.clear_interrupt(Interrupt::EdgeHigh);
         }
@@ -129,12 +132,21 @@ fn TIMER_IRQ_2() {
 
         data.alarm.clear_interrupt();
 
-        let state = if data.button.is_high().unwrap() {
+        let current_state = if data.button.is_high().unwrap() {
             ButtonState::Released
         } else {
             ButtonState::Pressed
         };
-        data.state = DebouncingState::Fixed(state);
-        data.last_event = Some(state);
+        let target_state = match data.state {
+            DebouncingState::Debouncing(s) => s,
+            DebouncingState::Fixed(_) => panic!("We should not be debouncing this"),
+        };
+        for s in [current_state, target_state] {
+            match s {
+                ButtonState::Pressed => data.event_pressed = true,
+                ButtonState::Released => data.event_released = true,
+            }
+        }
+        data.state = DebouncingState::Fixed(current_state);
     })
 }
