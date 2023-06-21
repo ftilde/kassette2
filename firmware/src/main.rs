@@ -475,15 +475,20 @@ fn run_until_poweroff(
 
     let mut state: State = if let Some(state) = load_save_state(&mut fs) {
         let file_name = state.id.filename_v2();
-        let file = SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly).unwrap();
-        let mut file = Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
-        file.seek(core::time::Duration::from_millis(state.pos_millis as _))
-            .unwrap();
-        let file = ManuallyDrop::new(file);
-        State::Stopped {
-            id: state.id,
-            file,
-            since: timer.get_counter(),
+        if let Ok(file) = SDCardFile::open(&mut fs, &file_name, Mode::ReadOnly) {
+            let mut file = Reader::new(file, &mut frame_buffer, &mut sample_buffer).unwrap();
+            file.seek(core::time::Duration::from_millis(state.pos_millis as _))
+                .unwrap();
+            let file = ManuallyDrop::new(file);
+            State::Stopped {
+                id: state.id,
+                file,
+                since: timer.get_counter(),
+            }
+        } else {
+            State::Empty {
+                since: timer.get_counter(),
+            }
         }
     } else {
         State::Empty {
