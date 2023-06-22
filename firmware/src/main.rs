@@ -282,6 +282,7 @@ fn run() -> ! {
     let led_pin = pins.gpio15.into_push_pull_output();
     let button_pin = pins.gpio5.into_pull_up_input();
     onoffbutton::setup_interrupt(&mut timer, button_pin);
+    //let mut led_pin2 = pins.led.into_push_pull_output();
 
     crate::led::setup_timer_interrupt(&mut timer, led_pin);
 
@@ -318,14 +319,14 @@ fn run() -> ! {
         // Drain queue of potential old events after core 1 has stopped.
         while event_cons.pop().is_some() {}
 
-        dormant_sleep_until_interrupt(&mut clocks /*, &mut button_pin*/);
+        dormant_sleep_until_interrupt(&mut clocks /*&mut led_pin2*/);
         transition_core1_blocking(Core1State::Running);
     }
 }
 
 fn dormant_sleep_until_interrupt(
     clocks: &mut hal::clocks::ClocksManager,
-    //button_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio5, hal::gpio::Input<hal::gpio::PullUp>>,
+    //led_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio25, hal::gpio::Output<hal::gpio::PushPull>>,
 ) {
     let mut pac = unsafe { pac::Peripherals::steal() };
 
@@ -351,6 +352,11 @@ fn dormant_sleep_until_interrupt(
     pac.PLL_USB.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
     pac.PLL_SYS.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
 
+    // Wait for blink command to finish
+    while led::is_command_running() {}
+
+    //let _ = led_pin.set_high();
+
     // Wait for button to turn off again
     while !onoffbutton::is_released() {}
 
@@ -360,6 +366,8 @@ fn dormant_sleep_until_interrupt(
 
     // Enter dormant mode (we return from this when the interrupt fires
     let xosc = unsafe { xosc.dormant() };
+
+    //let _ = led_pin.set_low();
 
     let xosc = xosc.free();
     let xosc = hal::xosc::setup_xosc_blocking(xosc, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();

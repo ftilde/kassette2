@@ -19,6 +19,7 @@ struct TimerIrqData {
     alarm: Alarm1,
     led: LedPin,
     current_sequence: BlinkSequence,
+    running: bool,
 }
 
 const MAX_SEQUENCE_LEN: usize = 3;
@@ -82,8 +83,19 @@ pub fn setup_timer_interrupt(timer: &mut hal::Timer, led: LedPin) {
             alarm: alarm1,
             led,
             current_sequence: BlinkSequence::none(),
+            running: false,
         }));
     });
+}
+
+pub fn is_command_running() -> bool {
+    cortex_m::interrupt::free(|cs| {
+        let data = TIMER_IRQ_DATA.borrow(cs);
+        let mut data = data.borrow_mut();
+        let data = data.as_mut().unwrap();
+
+        data.running
+    })
 }
 
 pub fn set_blink_sequence(seq: [i8; MAX_SEQUENCE_LEN]) {
@@ -115,8 +127,10 @@ fn TIMER_IRQ_1() {
                     let _ = data.led.set_low();
                 }
             }
+            data.running = true;
             data.alarm.schedule(c.duration).unwrap();
         } else {
+            data.running = false;
             let _ = data.led.set_low();
         }
     })
