@@ -319,7 +319,7 @@ fn run() -> ! {
         // Drain queue of potential old events after core 1 has stopped.
         while event_cons.pop().is_some() {}
 
-        dormant_sleep_until_interrupt(&mut clocks /*&mut led_pin2*/);
+        dormant_sleep_until_interrupt(&mut clocks /*, &mut led_pin2*/);
         transition_core1_blocking(Core1State::Running);
     }
 }
@@ -328,77 +328,100 @@ fn dormant_sleep_until_interrupt(
     clocks: &mut hal::clocks::ClocksManager,
     //led_pin: &mut hal::gpio::Pin<hal::gpio::bank0::Gpio25, hal::gpio::Output<hal::gpio::PushPull>>,
 ) {
-    let mut pac = unsafe { pac::Peripherals::steal() };
+    // Wait for blink command to finish. Otherwise the led may stay on in dormant mode.
+    while led::is_command_running() {
+        cortex_m::asm::delay(1000);
+    }
 
-    // Set up a minimal external clock for dormant mode
-    let xosc = hal::xosc::setup_xosc_blocking(pac.XOSC, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
-    clocks
-        .reference_clock
-        .configure_clock(&xosc, xosc.get_freq())
+    // Wait for button to turn off again before entering dormant mode below
+    while !onoffbutton::is_released() {
+        cortex_m::asm::delay(1000);
+    }
+
+    loop {
+        onoffbutton::clear_events();
+
+        let mut pac = unsafe { pac::Peripherals::steal() };
+
+        // Set up a minimal external clock for dormant mode
+        let xosc =
+            hal::xosc::setup_xosc_blocking(pac.XOSC, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
+
+        clocks
+            .reference_clock
+            .configure_clock(&xosc, xosc.get_freq())
+            .unwrap();
+        clocks
+            .system_clock
+            .configure_clock(&xosc, xosc.get_freq())
+            .unwrap();
+        clocks.usb_clock.disable();
+        clocks.adc_clock.disable();
+        clocks.gpio_output0_clock.disable();
+        clocks.gpio_output1_clock.disable();
+        clocks.gpio_output2_clock.disable();
+        clocks.gpio_output3_clock.disable();
+        clocks.rtc_clock.disable();
+        clocks.peripheral_clock.disable();
+        const PLL_PWR_BITS: u32 = 0x0000002d;
+        pac.PLL_USB.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
+        pac.PLL_SYS.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
+
+        // Set up wake up interrupt
+        // Note: Clearing is not required since the level interrupts are not latched
+        pac.IO_BANK0.dormant_wake_inte[0].write(|w| w.gpio5_level_low().set_bit());
+
+        // Enter dormant mode. We return from this when the interrupt fires
+        let xosc = unsafe { xosc.dormant() };
+
+        let xosc = xosc.free();
+        let xosc = hal::xosc::setup_xosc_blocking(xosc, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
+
+        let pll_sys = setup_pll_blocking(
+            pac.PLL_SYS,
+            xosc.operating_frequency(),
+            PLL_SYS_125MHZ,
+            clocks,
+            &mut pac.RESETS,
+        )
         .unwrap();
-    clocks
-        .system_clock
-        .configure_clock(&xosc, xosc.get_freq())
+        let pll_usb = setup_pll_blocking(
+            pac.PLL_USB,
+            xosc.operating_frequency(),
+            hal::pll::common_configs::PLL_USB_48MHZ,
+            clocks,
+            &mut pac.RESETS,
+        )
         .unwrap();
-    clocks.usb_clock.disable();
-    clocks.adc_clock.disable();
-    clocks.gpio_output0_clock.disable();
-    clocks.gpio_output1_clock.disable();
-    clocks.gpio_output2_clock.disable();
-    clocks.gpio_output3_clock.disable();
-    clocks.rtc_clock.disable();
-    clocks.peripheral_clock.disable();
-    const PLL_PWR_BITS: u32 = 0x0000002d;
-    pac.PLL_USB.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
-    pac.PLL_SYS.pwr.write(|w| unsafe { w.bits(PLL_PWR_BITS) });
 
-    // Wait for blink command to finish
-    while led::is_command_running() {}
+        clocks.init_default(&xosc, &pll_sys, &pll_usb).unwrap();
 
-    //let _ = led_pin.set_high();
+        clocks.usb_clock.enable();
+        clocks.adc_clock.enable();
+        clocks.gpio_output0_clock.enable();
+        clocks.gpio_output1_clock.enable();
+        clocks.gpio_output2_clock.enable();
+        clocks.gpio_output3_clock.enable();
+        clocks.rtc_clock.enable();
+        clocks.peripheral_clock.enable();
 
-    // Wait for button to turn off again
-    while !onoffbutton::is_released() {}
+        //let _ = led_pin.set_high();
 
-    // Set up wake up interrupt
-    // Note: Clearing is not required since the level interrupts are not latched
-    pac.IO_BANK0.dormant_wake_inte[0].write(|w| w.gpio5_level_low().set_bit());
+        // Wait for button to release to properly detect release events later
+        while onoffbutton::is_debouncing() {
+            cortex_m::asm::delay(1000);
+        }
+        //let _ = led_pin.set_low();
 
-    // Enter dormant mode (we return from this when the interrupt fires
-    let xosc = unsafe { xosc.dormant() };
-
-    //let _ = led_pin.set_low();
-
-    let xosc = xosc.free();
-    let xosc = hal::xosc::setup_xosc_blocking(xosc, rp_pico::XOSC_CRYSTAL_FREQ.Hz()).unwrap();
-
-    let pll_sys = setup_pll_blocking(
-        pac.PLL_SYS,
-        xosc.operating_frequency(),
-        PLL_SYS_125MHZ,
-        clocks,
-        &mut pac.RESETS,
-    )
-    .unwrap();
-    let pll_usb = setup_pll_blocking(
-        pac.PLL_USB,
-        xosc.operating_frequency(),
-        hal::pll::common_configs::PLL_USB_48MHZ,
-        clocks,
-        &mut pac.RESETS,
-    )
-    .unwrap();
-
-    clocks.init_default(&xosc, &pll_sys, &pll_usb).unwrap();
-
-    clocks.usb_clock.enable();
-    clocks.adc_clock.enable();
-    clocks.gpio_output0_clock.enable();
-    clocks.gpio_output1_clock.enable();
-    clocks.gpio_output2_clock.enable();
-    clocks.gpio_output3_clock.enable();
-    clocks.rtc_clock.enable();
-    clocks.peripheral_clock.enable();
+        // Only exit if we have actually detected a "proper" button press where the button was
+        // pressed for the debounce duration. Otherwise we may wake up on fluctuations from the
+        // power grid which spuriously trigger an interrupt on the button pin (likely due to power
+        // dropping below 5V. I've observed this behaviour when the box is deployed next to an
+        // electrical roller shutter.
+        if onoffbutton::was_pressed() {
+            break;
+        }
+    }
 
     //    TODO: - see if some clocks can be skipped (and maybe disabled altogether)
 }
@@ -507,7 +530,8 @@ fn run_until_poweroff(
     // ----------------------------------------------------------------------------
     // Main loop! -----------------------------------------------------------------
     // ----------------------------------------------------------------------------
-    onoffbutton::clear();
+
+    onoffbutton::clear_events();
 
     let mut turn_off_pressed = false;
 

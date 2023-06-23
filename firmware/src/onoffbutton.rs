@@ -22,7 +22,7 @@ enum DebouncingState {
     Fixed(ButtonState),
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum ButtonState {
     Pressed,
     Released,
@@ -38,7 +38,7 @@ struct IrqData {
 
 static IRQ_DATA: Mutex<RefCell<Option<IrqData>>> = Mutex::new(RefCell::new(None));
 
-pub fn clear() {
+pub fn clear_events() {
     cortex_m::interrupt::free(|cs| {
         let data = IRQ_DATA.borrow(cs);
         let mut data = data.borrow_mut();
@@ -69,6 +69,16 @@ pub fn is_released() -> bool {
     })
 }
 
+pub fn is_debouncing() -> bool {
+    cortex_m::interrupt::free(|cs| {
+        let data = IRQ_DATA.borrow(cs);
+        let mut data = data.borrow_mut();
+        let data = data.as_mut().unwrap();
+
+        matches!(data.state, DebouncingState::Debouncing(_))
+    })
+}
+
 pub fn setup_interrupt(timer: &mut hal::Timer, button: ButtonPin) {
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::IO_IRQ_BANK0);
@@ -96,7 +106,7 @@ pub fn setup_interrupt(timer: &mut hal::Timer, button: ButtonPin) {
     });
 }
 
-const DEBOUNCE_DURATION_MILLIS: u32 = 30;
+const DEBOUNCE_DURATION_MILLIS: u32 = 50;
 
 #[interrupt]
 fn IO_IRQ_BANK0() {
@@ -141,8 +151,8 @@ fn TIMER_IRQ_2() {
             DebouncingState::Debouncing(s) => s,
             DebouncingState::Fixed(_) => panic!("We should not be debouncing this"),
         };
-        for s in [current_state, target_state] {
-            match s {
+        if current_state == target_state {
+            match current_state {
                 ButtonState::Pressed => data.event_pressed = true,
                 ButtonState::Released => data.event_released = true,
             }
