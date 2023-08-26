@@ -47,7 +47,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     );
 
     {
-        let mut fs = sdcard::SDCardController::init(&mut sd);
+        let sd = sdcard::SDCardBlockDeviceMut { inner: &mut sd };
+        let mut fs = sdcard::SDCardController::init(sd);
 
         if let Ok(mut file) = SDCardFile::open(
             &mut fs,

@@ -24,7 +24,7 @@ fugit = "0.3.6"
 ringbuf = { version = "0.3.2", default-features = false}
 #usbd-serial = "0.1"
 #embedded-sdmmc = "0.4"
-embedded-sdmmc = { path = "../../embedded-sdmmc-rs" }
+embedded-sdmmc = { git = "https://github.com/ftilde/embedded-sdmmc-rs" }
 acid_io = { git = "https://github.com/dataphract/acid_io", default-features=false }
 config = { path = "../config" }
 id_reader = { path = "../id_reader" }

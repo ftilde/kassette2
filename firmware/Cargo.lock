@@ -258,10 +258,12 @@ dependencies = [
 
 [[package]]
 name = "embedded-sdmmc"
-version = "0.4.0"
+version = "0.5.0"
+source = "git+https://github.com/ftilde/embedded-sdmmc-rs#69eef723587d2c21b332f542ab8ef34cf7a996fb"
 dependencies = [
  "byteorder",
  "embedded-hal",
+ "heapless",
  "log",
 ]
 

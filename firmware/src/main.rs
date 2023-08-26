@@ -139,7 +139,7 @@ fn core1_task(
         hal::gpio::Output<hal::gpio::PushPull>,
     >,
 ) -> ! {
-    let delay_cycles = 12500000; //100Ms with default clock rate
+    let delay_cycles = 12500000; //100ms with default clock rate
 
     loop {
         id_reader_reset.set_high().unwrap();
@@ -493,11 +493,12 @@ const BLINK_SEQ_ERROR: [i8; 3] = [50, -50, 50];
 fn run_until_poweroff(
     prod: &mut QueueProducer,
     event_consumer: &mut CardEventConsumer,
-    sd: &mut sdcard::SDSpi<hal::gpio::bank0::Gpio1>,
+    sd: &mut sdcard::SDCardBlockDevice<hal::gpio::bank0::Gpio1>,
     timer: &mut hal::Timer,
     //button_pin: &mut dyn InputPin<Error = core::convert::Infallible>,
     speaker_control: &mut SpeakerControl,
 ) {
+    let sd = sdcard::SDCardBlockDeviceMut { inner: sd };
     let mut fs = sdcard::SDCardController::init(sd);
 
     const NUM_CHANNELS: u32 = 1;

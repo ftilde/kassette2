@@ -2,8 +2,8 @@ use core::mem::MaybeUninit;
 
 use acid_io::SeekFrom;
 use embedded_sdmmc::{
-    filesystem::Mode, BlockSpi, Controller, Directory, File, SdMmcSpi, TimeSource, Timestamp,
-    Volume, VolumeIdx,
+    filesystem::Mode, Directory, File, SdCard, TimeSource, Timestamp, Volume, VolumeIdx,
+    VolumeManager,
 };
 use fugit::RateExtU32;
 use rp_pico::{
@@ -34,24 +34,17 @@ impl TimeSource for DummyTimesource {
 }
 
 pub struct SDCardController<'a, CS: PinId> {
-    controller: Controller<
-        BlockSpi<
-            'a,
-            hal::Spi<hal::spi::Enabled, pac::SPI0, 8>,
-            Pin<CS, hal::gpio::Output<hal::gpio::PushPull>>,
-        >,
-        DummyTimesource,
-    >,
+    controller: VolumeManager<SDCardBlockDeviceMut<'a, CS>, DummyTimesource>,
     root_dir: Directory,
     volume: Volume,
 }
 
-impl<CS: PinId> SDCardController<'_, CS> {
+impl<'a, CS: PinId> SDCardController<'a, CS> {
     pub fn open(
         &mut self,
         filename: &str,
         mode: Mode,
-    ) -> Result<File, embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
+    ) -> Result<File, embedded_sdmmc::Error<embedded_sdmmc::sdcard::Error>> {
         self.controller
             .open_file_in_dir(&mut self.volume, &self.root_dir, filename, mode)
     }
@@ -74,32 +67,70 @@ impl<CS: PinId> SDCardController<'_, CS> {
         self.controller.write(&mut self.volume, file, buf).unwrap()
     }
 
-    pub fn init(sdspi: &mut SDSpi<CS>) -> SDCardController<CS> {
+    pub fn init(sdspi: SDCardBlockDeviceMut<'a, CS>) -> SDCardController<CS> {
         // Next we need to aquire the block device and initialize the
         // communication with the SD card.
-        let block = sdspi.acquire().unwrap();
+        //let block = sdspi.acquire().unwrap();
 
-        let mut controller = Controller::new(block, DummyTimesource::default());
+        let mut manager = VolumeManager::new(sdspi, DummyTimesource::default());
 
-        let volume = controller.get_volume(VolumeIdx(0)).unwrap();
+        let volume = manager.get_volume(VolumeIdx(0)).unwrap();
 
         //blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
 
         // After we have the volume (partition) of the drive we got to open the
         // root directory:
-        let root_dir = controller.open_root_dir(&volume).unwrap();
+        let root_dir = manager.open_root_dir(&volume).unwrap();
         SDCardController {
-            controller,
+            controller: manager,
             volume,
             root_dir,
         }
     }
 }
 
-pub type SDSpi<CS> = SdMmcSpi<
+pub struct BlockingDelay {}
+impl embedded_hal::blocking::delay::DelayUs<u8> for BlockingDelay {
+    fn delay_us(&mut self, us: u8) {
+        let mult = 125; // 125MHz * 1us = 125
+        cortex_m::asm::delay(mult * (us as u32));
+    }
+}
+
+pub type SDCardBlockDevice<CS> = SdCard<
     hal::Spi<hal::spi::Enabled, pac::SPI0, 8>,
     Pin<CS, hal::gpio::Output<hal::gpio::PushPull>>,
+    BlockingDelay,
 >;
+
+pub struct SDCardBlockDeviceMut<'a, CS: PinId> {
+    pub inner: &'a mut SDCardBlockDevice<CS>,
+}
+
+impl<'a, CS: PinId> embedded_sdmmc::BlockDevice for SDCardBlockDeviceMut<'a, CS> {
+    type Error = embedded_sdmmc::sdcard::Error;
+
+    fn read(
+        &self,
+        blocks: &mut [embedded_sdmmc::Block],
+        start_block_idx: embedded_sdmmc::BlockIdx,
+        reason: &str,
+    ) -> Result<(), Self::Error> {
+        self.inner.read(blocks, start_block_idx, reason)
+    }
+
+    fn write(
+        &self,
+        blocks: &[embedded_sdmmc::Block],
+        start_block_idx: embedded_sdmmc::BlockIdx,
+    ) -> Result<(), Self::Error> {
+        self.inner.write(blocks, start_block_idx)
+    }
+
+    fn num_blocks(&self) -> Result<embedded_sdmmc::BlockCount, Self::Error> {
+        self.inner.num_blocks()
+    }
+}
 
 pub fn init_sd<
     CLK: PinId + BankPinId,
@@ -118,7 +149,7 @@ pub fn init_sd<
     spi: pac::SPI0,
     resets: &mut pac::RESETS,
     clocks: &hal::clocks::ClocksManager,
-) -> SDSpi<CS> {
+) -> SDCardBlockDevice<CS> {
     let _spi_sclk = spi_sclk.into_mode::<FunctionSpi>();
     let _spi_mosi = spi_mosi.into_mode::<FunctionSpi>();
     let _spi_miso = spi_miso.into_mode::<FunctionSpi>();
@@ -132,7 +163,7 @@ pub fn init_sd<
         &embedded_hal::spi::MODE_0,
     );
 
-    SdMmcSpi::new(spi, spi_csn.into_mode())
+    SDCardBlockDevice::new(spi, spi_csn.into_mode(), BlockingDelay {})
 }
 
 pub struct SDCardFile<'a, 'b, CS: hal::gpio::PinId> {
@@ -216,7 +247,7 @@ impl<'a, 'b, CS: hal::gpio::PinId> SDCardFile<'a, 'b, CS> {
         fs: &'a mut SDCardController<'b, CS>,
         name: &str,
         mode: Mode,
-    ) -> Result<Self, embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
+    ) -> Result<Self, embedded_sdmmc::Error<embedded_sdmmc::sdcard::Error>> {
         let file = MaybeUninit::new(fs.open(name, mode)?);
         Ok(SDCardFile { file, fs })
     }
