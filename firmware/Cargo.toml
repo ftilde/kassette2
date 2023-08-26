@@ -12,18 +12,14 @@ lto = "thin"
 
 [dependencies]
 embedded-hal = "0.2.7"
-nb = "1.0.0"
 cortex-m = "0.7.6"
 cortex-m-rt = "0.7.3"
 rp-pico = "0.6"
 pio = "0.2.1"
 pio-proc = "0.2.1"
 bytemuck = { version = "1.12", features=["derive"] }
-micromath = "2.0"
 fugit = "0.3.6"
 ringbuf = { version = "0.3.2", default-features = false}
-#usbd-serial = "0.1"
-#embedded-sdmmc = "0.4"
 embedded-sdmmc = { git = "https://github.com/ftilde/embedded-sdmmc-rs" }
 acid_io = { git = "https://github.com/dataphract/acid_io", default-features=false }
 config = { path = "../config" }
