@@ -26,7 +26,7 @@ impl core::fmt::Display for Id {
         for b in &self.0 {
             let nibbles = fmt_byte_to_nibbles(*b);
             f.write_str(unsafe { core::str::from_utf8_unchecked(&nibbles) })?;
-            write!(f, " ")?;
+            //write!(f, " ")?;
         }
         Ok(())
     }
