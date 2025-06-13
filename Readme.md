@@ -1,6 +1,6 @@
 # Kassette
 
-![IMG_20230610_151516](https://gist.github.com/user-attachments/assets/f8d5660e-bf1b-4914-b2d5-317528c1327a)
+![assembled kassette box](https://github.com/user-attachments/assets/ba009711-90cc-459f-99a2-4345d535614e)
 
 This project aims to mimic the cassette recorder experience of the 80s/90s for the young generation:
 Put an RFID-card on speaker-box and an audio drama/book starts playing.
@@ -18,8 +18,8 @@ The electronic components fit on a small board:
 See `schematic.fzz` (open with [Fritzing](https://fritzing.org/)).
 After completing the electronics, you can attach a speaker, status LED, button and potentiometer and fit those in a small wooden box.
 
-![IMG_20230610_151436](https://gist.github.com/user-attachments/assets/ff5e37f8-2cb9-4eb3-b5ba-dd2bcda237ea)
-![IMG_20230610_151448](https://gist.github.com/user-attachments/assets/a379956c-cd53-4152-a1e0-72faa71ca7de)
+![look inside kassette box](https://github.com/user-attachments/assets/cfecb9fc-51ab-4f26-8d83-08304370bb3c)
+![closer look inside kassette box](https://github.com/user-attachments/assets/f7f63b26-8c18-43b0-bbbb-699c5b500501)
 
 ## Adding media files
 
