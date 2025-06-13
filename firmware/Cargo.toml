@@ -25,4 +25,4 @@ embedded-sdmmc = { git = "https://github.com/ftilde/embedded-sdmmc-rs" }
 acid_io = { git = "https://github.com/dataphract/acid_io", default-features=false }
 config = { path = "../config" }
 id_reader = { path = "../id_reader" }
-embedded-qoa = { path = "../../embedded-qoa" }
+embedded-qoa = { git = "https://github.com/ftilde/embedded-qoa" }
