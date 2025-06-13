@@ -79,3 +79,7 @@ Place a card on the RFID reader and the associated audio drama should start play
 
 A previous version of kasette based on a raspberri pi and a hifiberry dac can be found [here](https://github.com/ftilde/kassette).
 The sync tool can also be used with sd-cards for the older version, but there is no real reason to use it if you have not built it already.
+
+## License
+
+`kassette` is released under GPL 3.0 or later. See `COPYING` for details.
