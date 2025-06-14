@@ -13,13 +13,39 @@ The heart of kassette is a [raspberri pi pico](https://www.raspberrypi.com/docum
 
 ## Building
 
-A kassette box is really cheap (about 15€) and comparatively easy to build.
+A kassette box is cheap (about 30€) and comparatively easy to build.
 The electronic components fit on a small board:
 See `schematic.fzz` (open with [Fritzing](https://fritzing.org/)).
 After completing the electronics, you can attach a speaker, status LED, button and potentiometer and fit those in a small wooden box.
 
 ![look inside kassette box](https://github.com/user-attachments/assets/cfecb9fc-51ab-4f26-8d83-08304370bb3c)
 ![closer look inside kassette box](https://github.com/user-attachments/assets/f7f63b26-8c18-43b0-bbbb-699c5b500501)
+
+| Component                  | Price  |
+| -------------------------- | ------ |
+| wooden box                 | 2€     |
+| usb charger+cable          | 4€     |
+| speaker, 3W, 8Ohm          | 3€     |
+| Rpi pico                   | 5€     |
+| TDA 7267                   | 1.50€  |
+| breadboard                 | 1€     |
+| microsd breakout/adaptor   | 2.50€  |
+| RFID reader (RFID RC522)   | 5€     |
+| potentiometer (1kOhm)      | 1€     |
+| a nice button              | 1€     |
+| MicroSDHC 32GB             | 4€     |
+| ceramic capacitor 100nF    | cents  |
+| catalytic capacitor 0.1mF  | cents  |
+| catalytic capacitor 4.7uF  | cents  |
+| catalytic capacitor 0.47mF | cents  |
+| resistor 15kOhm            | cents  |
+| resistor 100Ohm            | cents  |
+| LED                        | cents  |
+| -------------------------- | ------ |
+| total                      | ~30€   |
+
+Additional you'll need RFID cards.
+I bought 100 for about 30€.
 
 ## Adding media files
 
